@@ -1,0 +1,35 @@
+name: Firmware checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test portable firmware logic
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror -fsanitize=undefined,address -I libraries/RainLink/src tests/logic_test.cpp -o /tmp/rain-logic-test
+          /tmp/rain-logic-test
+          node tests/portal_test.mjs
+      - uses: arduino/setup-arduino-cli@v2
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.arduino15
+            ~/Arduino/libraries
+          key: arduino-${{ runner.os }}-esp32-3.3.2-radio-7.8.1-u8g2-2.36.17
+      - name: Install pinned build dependencies
+        run: |
+          arduino-cli core update-index --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli core install esp32:esp32@3.3.2 --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli lib install 'RadioLib@7.8.1' 'U8g2@2.36.17'
+      - name: Compile both roles with throwaway keys
+        run: |
+          python tools/ci_key.py
+          arduino-cli compile --fqbn esp32:esp32:heltec_wifi_lora_32_V3 --libraries libraries Emisor
+          arduino-cli compile --fqbn esp32:esp32:heltec_wifi_lora_32_V3 --libraries libraries Receptor
