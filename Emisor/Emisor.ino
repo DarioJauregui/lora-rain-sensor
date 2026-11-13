@@ -1,889 +1,329 @@
-// ARCHIVO UNICO - Emisor - Sensor lluvia / paro bombas
-
 #include <Arduino.h>
-#include <SPI.h>
-#include <Wire.h>
-#include <RadioLib.h>
-#include <U8g2lib.h>
-#include <WiFi.h>
-#include <WebServer.h>
-#include <Update.h>
-#include <Preferences.h>
-#include <mbedtls/md.h>
-#include <esp_ota_ops.h>
-#include <esp_system.h>
-#include <stddef.h>
-
-// Version shared by the two devices; Arduino-ESP32 core 3.3.12, RadioLib 7.8.1.
-static const char *FW_VERSION = "1.0.0-rc";
-static const uint32_t PROTOCOL_MAGIC = 0x52414E39UL;
-static const uint8_t PROTOCOL_VERSION = 1;
-static const uint32_t TX_ID = 0x54583031UL;
-static const uint32_t RX_ID = 0x52583031UL;
-static const uint8_t FRAME_HELLO = 1;
-static const uint8_t FRAME_CHALLENGE = 2;
-static const uint8_t FRAME_STATE = 3;
-static const uint8_t FRAME_ACK = 4;
-static const uint8_t FRAME_MAINT = 5;
-static const uint8_t ACK_APPLIED_GPIO = 0x01;
-static const uint8_t ACK_RELAY_ARMED = 0x02;
-static const uint8_t FRAME_FLAG_SLEEP = 0x04;
-static const uint8_t FRAME_FLAG_DO_WAKE = 0x08;
-
-// Clave HMAC: archivo privado local, no versionado.
 #include "pair_key.h"
-
-// Verified Heltec WiFi LoRa 32 V3 pins.
-static constexpr uint8_t RADIO_NSS = 8;
-static constexpr uint8_t RADIO_SCK = 9;
-static constexpr uint8_t RADIO_MOSI = 10;
-static constexpr uint8_t RADIO_MISO = 11;
-static constexpr uint8_t RADIO_RST = 12;
-static constexpr uint8_t RADIO_BUSY = 13;
-static constexpr uint8_t RADIO_DIO1 = 14;
-static constexpr uint8_t OLED_SDA = 17;
-static constexpr uint8_t OLED_SCL = 18;
-static constexpr uint8_t OLED_RST = 21;
-static constexpr uint8_t VEXT_CTRL = 36;
-
-static constexpr float LORA_FREQUENCY_MHZ = 868.3f;
-static constexpr float LORA_BW_KHZ = 125.0f;
-static constexpr uint8_t LORA_SF = 9;
-static constexpr uint8_t LORA_CR = 5;
-static constexpr int8_t LORA_POWER_DBM = 10;
-static constexpr uint8_t LORA_PREAMBLE = 8;
-static constexpr uint8_t LORA_SYNC_WORD = 0x12;
-static constexpr float LORA_TCXO_V = 1.8f;
-
-// Authenticated point-to-point frames; weather data is NOT encrypted.
-struct __attribute__((packed)) RainFrame {
-  uint32_t magic;
-  uint8_t version;
-  uint8_t type;
-  uint8_t wet;
-  uint8_t flags;
-  uint32_t sender;
-  uint32_t boot;
-  uint32_t seq;
-  uint64_t session;
-  uint16_t ao;
-  uint16_t batteryMv;
-  uint32_t ackSeq;
-  uint8_t tag[16];
-};
-static_assert(sizeof(RainFrame) == 52, "Protocol layout changed");
-
-SX1262 radio = new Module(RADIO_NSS, RADIO_DIO1, RADIO_RST, RADIO_BUSY);
-U8G2_SSD1306_128X64_NONAME_F_HW_I2C oled(U8G2_R0, OLED_RST, OLED_SCL, OLED_SDA);
-WebServer web(80);
-
-String coreRole;
-String coreApSsid;
-String coreApPassword;
-String coreCsrfToken;
-bool coreApActive = false;
-bool coreApPermanent = false;
-bool coreOtaInProgress = false;
-bool coreOtaAuthenticated = false;
-bool coreOtaOk = false;
-uint32_t coreApStartMs = 0;
-uint32_t coreRebootAtMs = 0;
-bool coreRoutesReady = false;
-bool coreOledReady = false;
-bool coreOledOn = false;
-uint32_t coreScreenUntilMs = 0;
-constexpr uint32_t PORTAL_WINDOW_MS = 180000;
-// An estimated diagnostic indicator, not a calibrated coverage percentage.
-int signalQuality(float rssi, float snr, bool fresh, float deliveryPct = 100.0f) {
-  if (!fresh) return -1;
-  float r = constrain((rssi + 135.0f) * 100.0f / 70.0f, 0.0f, 100.0f);
-  float n = constrain((snr + 15.0f) * 100.0f / 27.0f, 0.0f, 100.0f);
-  return (int)roundf(0.35f * r + 0.30f * n +
-                     0.35f * constrain(deliveryPct, 0.0f, 100.0f));
-}
-// EU868 conservative airtime cap: 30 seconds TX per local 1h window
-// (<1% of 3600 seconds). SX1262 SF9/BW125/52B approx 329 ms.
-// This is an engineering guard, not an RF conformity certificate.
-uint32_t coreDutyWindowMs = 0;
-uint32_t coreDutyUsedMs = 0;
-static constexpr uint32_t ESTIMATED_FRAME_AIRTIME_MS = 345;
-static constexpr uint32_t MAX_HOURLY_TX_MS = 30000;
-
-// Implemented in each sketch.
-String getStatusJson();
-String roleControlsHtml();
-void configureRoleRoutes();
-void beforeOta();
-
-void signFrame(RainFrame &f) {
-  uint8_t digest[32];
-  memset(f.tag, 0, sizeof(f.tag));
-  const mbedtls_md_info_t *md = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
-  mbedtls_md_hmac(md, PAIR_KEY, sizeof(PAIR_KEY),
-                  reinterpret_cast<const uint8_t *>(&f),
-                  offsetof(RainFrame, tag), digest);
-  memcpy(f.tag, digest, sizeof(f.tag));
-  memset(digest, 0, sizeof(digest));
-}
-
-bool validFrame(const RainFrame &f) {
-  if (f.magic != PROTOCOL_MAGIC || f.version != PROTOCOL_VERSION) return false;
-  RainFrame check = f;
-  signFrame(check);
-  uint8_t diff = 0;
-  for (uint8_t i = 0; i < sizeof(f.tag); i++) diff |= f.tag[i] ^ check.tag[i];
-  return diff == 0;
-}
-
-RainFrame newFrame(uint8_t type, uint32_t sender, uint32_t boot,
-                   uint32_t seq, uint64_t session = 0) {
-  RainFrame f{};
-  f.magic = PROTOCOL_MAGIC;
-  f.version = PROTOCOL_VERSION;
-  f.type = type;
-  f.sender = sender;
-  f.boot = boot;
-  f.seq = seq;
-  f.session = session;
-  return f;
-}
-
-uint64_t random64() {
-  return (static_cast<uint64_t>(esp_random()) << 32) | esp_random();
-}
-
-bool initRadio(void (*onRx)(void)) {
-  SPI.begin(RADIO_SCK, RADIO_MISO, RADIO_MOSI, RADIO_NSS);
-  int16_t rc = radio.begin(LORA_FREQUENCY_MHZ, LORA_BW_KHZ, LORA_SF,
-                           LORA_CR, LORA_SYNC_WORD, LORA_POWER_DBM,
-                           LORA_PREAMBLE, LORA_TCXO_V);
-  if (rc != RADIOLIB_ERR_NONE) {
-    Serial.printf("RADIO INIT ERROR %d\n", rc);
-    return false;
-  }
-  rc = radio.setDio2AsRfSwitch(true);
-  if (rc != RADIOLIB_ERR_NONE) Serial.printf("RF SWITCH WARNING %d\n", rc);
-  radio.setCRC(2);  // LoRa CRC-16, in addition to HMAC authentication.
-  radio.setPacketReceivedAction(onRx);
-  rc = radio.startReceive();
-  Serial.printf("Radio RX: %d, SF%u, %.1f MHz\n", rc, LORA_SF, LORA_FREQUENCY_MHZ);
-  return rc == RADIOLIB_ERR_NONE;
-}
-
-int16_t transmitFrame(RainFrame &f, void (*onRx)(void)) {
-  const uint32_t now = millis();
-  if (now - coreDutyWindowMs >= 3600000UL) {
-    coreDutyWindowMs = now;
-    coreDutyUsedMs = 0;
-  }
-  if (coreDutyUsedMs + ESTIMATED_FRAME_AIRTIME_MS > MAX_HOURLY_TX_MS) {
-    Serial.println("DUTY LIMIT: packet not transmitted");
-    return -32000;
-  }
-  coreDutyUsedMs += ESTIMATED_FRAME_AIRTIME_MS;
-  signFrame(f);
-  radio.clearPacketReceivedAction();
-  int16_t rc = radio.transmit(reinterpret_cast<uint8_t *>(&f), sizeof(f));
-  radio.setPacketReceivedAction(onRx);
-  int16_t armRc = radio.startReceive();
-  if (armRc != RADIOLIB_ERR_NONE) Serial.printf("RX REARM ERROR %d\n", armRc);
-  return rc;
-}
-
-bool readFrame(RainFrame &f) {
-  size_t length = radio.getPacketLength();
-  if (length != sizeof(RainFrame)) {
-    uint8_t discard[128];
-    if (length && length <= sizeof(discard)) radio.readData(discard, length);
-    else radio.standby();
-    return false;
-  }
-  if (radio.readData(reinterpret_cast<uint8_t *>(&f), sizeof(f)) != RADIOLIB_ERR_NONE) return false;
-  return validFrame(f);
-}
-
-void coreWakeDisplay(uint32_t durationMs) {
-  if (!coreOledReady) return;
-  oled.setPowerSave(0);
-  coreOledOn = true;
-  coreScreenUntilMs = millis() + durationMs;
-}
-
-void coreScreen(const String &line1, const String &line2,
-                const String &line3, const String &line4,
-                const String &line5, const String &line6) {
-  if (!coreOledReady || !coreOledOn) return;
-  oled.clearBuffer();
-  oled.setFont(u8g2_font_6x10_tf);
-  const String lines[] = {line1, line2, line3, line4, line5, line6};
-  for (uint8_t i = 0; i < 6; ++i) {
-    oled.drawUTF8(0, 10 + 10 * i, lines[i].substring(0, 21).c_str());
-  }
-  oled.sendBuffer();
-}
-
-void coreInitDisplay() {
-  pinMode(VEXT_CTRL, OUTPUT);
-  digitalWrite(VEXT_CTRL, LOW);  // Heltec V3 Vext enabled.
-  delay(90);
-  Wire.begin(OLED_SDA, OLED_SCL);
-  oled.setI2CAddress(0x3C * 2);
-  oled.begin();
-  coreOledReady = true;
-  coreWakeDisplay(120000);
-  coreScreen("LLUVIA / " + coreRole, "Iniciando...", "", "", "", "");
-}
-
-String coreGeneratePassword() {
-  const char alphabet[] = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
-  String p;
-  for (int i = 0; i < 18; i++) p += alphabet[esp_random() % (sizeof(alphabet) - 1)];
-  return p;
-}
-
-String coreGenerateCsrf() {
-  char buf[21];
-  snprintf(buf, sizeof(buf), "%08lX%08lX", (unsigned long)esp_random(),
-           (unsigned long)esp_random());
-  return String(buf);
-}
-
-bool coreIsAuthenticated() {
-  if (web.authenticate("admin", coreApPassword.c_str())) return true;
-  web.requestAuthentication(DIGEST_AUTH, "LLUVIA", "Acceso restringido");
-  return false;
-}
-
-String coreHtml() {
-  String h = R"PORTAL(<!doctype html><html lang="es"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Sensor lluvia - paro bombas</title>
-<style>
-:root{color-scheme:light}*{box-sizing:border-box}body{font:14px system-ui,Arial;
-background:#fff;color:#282828;margin:0 auto;padding:20px;max-width:680px}
-h1{font-size:19px;color:#6D130E;margin:0 0 12px}h2{font-size:16px;color:#6D130E;
-border-bottom:1px solid #ddd;padding-bottom:6px;margin-top:22px}
-small{color:#666}.row{display:flex;justify-content:space-between;gap:12px;
-padding:7px 0;border-bottom:1px solid #eee}.row span{overflow-wrap:anywhere;text-align:right}
-label{display:block;margin:9px 0}input,select{font:inherit;padding:7px;max-width:100%;
-border:1px solid #aaa;border-radius:4px}input[type=number]{width:115px}
-button{background:#6D130E;border:0;border-radius:4px;color:white;font:inherit;
-padding:9px 14px;margin:6px 0;cursor:pointer}button:active{background:#DC241F}
-.err{color:#DC241F}.tag{font-size:12px;color:#6D130E}.meta{color:#666;font-size:12px}
-fieldset{border:1px solid #ddd;border-radius:5px;margin:10px 0}
-</style></head><body>
-<h1>Sensor lluvia - paro bombas</h1><div class="meta">Rol: )PORTAL";
-  h += coreRole;
-  h += F(" · Firmware: "); h += FW_VERSION;
-  h += R"PORTAL(</div><h2>Estado</h2><div id="status">Leyendo...</div>
-<script>
-async function refresh(){try{let r=await fetch('/status',{cache:'no-store'});
-if(!r.ok)throw Error();let d=await r.json();document.getElementById('status').innerHTML=
-Object.entries(d).map(([k,v])=>'<div class="row"><b>'+k.replaceAll('_',' ')+'</b><span>'+
-((v===true)?'Sí':(v===false)?'No':String(v))+'</span></div>').join('');
-}catch(e){document.getElementById('status').textContent='Sin conexión';}}
-refresh();setInterval(refresh,2500);
-</script>)PORTAL";
-  h += roleControlsHtml();
-  h += F("<h2>Firmware OTA</h2><small>Solo archivo .bin de esta placa y rol. "
-         "Comprobar estado de la maniobra antes de actualizar.</small>"
-         "<form method='POST' enctype='multipart/form-data' action='/update?token=");
-  h += coreCsrfToken;
-  h += F("'><input type='file' name='firmware' accept='.bin' required>"
-         "<button type='submit'>Actualizar</button></form></body></html>");
-  return h;
-}
-
-void coreHandleUpload() {
-  HTTPUpload &u = web.upload();
-  if (u.status == UPLOAD_FILE_START) {
-    coreOtaAuthenticated = web.authenticate("admin", coreApPassword.c_str()) &&
-                           web.arg("token") == coreCsrfToken &&
-                           u.filename.endsWith(".bin") &&
-                           u.filename.indexOf(coreRole == "TX" ? "Emisor" : "Receptor") >= 0;
-    coreOtaOk = false;
-    if (!coreOtaAuthenticated) {
-      Serial.println("OTA rejected (auth/token/filename)");
-      return;
-    }
-    coreOtaInProgress = true;
-    Serial.printf("OTA start: %s\n", u.filename.c_str());
-    if (!esp_ota_get_next_update_partition(nullptr)) {
-      coreOtaAuthenticated = false;
-      coreOtaInProgress = false;
-      Serial.println("OTA unavailable: no second app partition");
-      return;
-    }
-    if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
-      coreOtaAuthenticated = false;
-      coreOtaInProgress = false;
-      Update.printError(Serial);
-    } else {
-      beforeOta(); // Receiver puts output in its configured fail-safe state.
-    }
-  } else if (u.status == UPLOAD_FILE_WRITE && coreOtaAuthenticated) {
-    if (Update.write(u.buf, u.currentSize) != u.currentSize) {
-      coreOtaAuthenticated = false;
-      Update.abort();
-      Serial.println("OTA write error");
-    }
-  } else if (u.status == UPLOAD_FILE_END) {
-    if (coreOtaAuthenticated) coreOtaOk = Update.end(true);
-    coreOtaInProgress = false;
-    Serial.println(coreOtaOk ? "OTA completed" : "OTA incomplete/invalid");
-    if (!coreOtaOk) Update.printError(Serial);
-  } else if (u.status == UPLOAD_FILE_ABORTED) {
-    Update.abort();
-    coreOtaInProgress = false;
-    coreOtaOk = false;
-  }
-}
-
-void coreConfigureWeb() {
-  web.on("/", HTTP_GET, []() {
-    if (!coreIsAuthenticated()) return;
-    web.send(200, "text/html; charset=utf-8", coreHtml());
-  });
-  web.on("/status", HTTP_GET, []() {
-    if (!coreIsAuthenticated()) return;
-    web.sendHeader("Cache-Control", "no-store");
-    web.send(200, "application/json", getStatusJson());
-  });
-  web.on("/update", HTTP_POST, []() {
-    if (!coreOtaAuthenticated) {
-      web.send(403, "text/plain", "OTA denied");
-      return;
-    }
-    web.send( coreOtaOk ? 200 : 500, "text/plain",
-              coreOtaOk ? "OK. Reiniciando." : "ERROR OTA. Ver consola.");
-    if (coreOtaOk) coreRebootAtMs = millis() + 1500;
-  }, coreHandleUpload);
-  web.onNotFound([]() {
-    if (!coreIsAuthenticated()) return;
-    web.send(404, "text/plain", "No encontrado");
-  });
-}
-
-void coreStartPortal(bool permanent) {
-  if (coreApActive) return;
-  coreApPermanent = permanent;
-  WiFi.mode(WIFI_AP);
-  WiFi.setSleep(false);
-
-  Preferences p;
-  p.begin("rainwifi", false);
-  coreApPassword = p.getString("password", "");
-  if (coreApPassword.length() < 16) {
-    coreApPassword = coreGeneratePassword();
-    p.putString("password", coreApPassword);
-  }
-  p.end();
-
-  char suffix[10];
-  snprintf(suffix, sizeof(suffix), "%04lX", (unsigned long)(ESP.getEfuseMac() & 0xFFFFUL));
-  coreApSsid = "LLUVIA-" + coreRole + "-" + suffix;
-  coreCsrfToken = coreGenerateCsrf();
-  if (!WiFi.softAP(coreApSsid.c_str(), coreApPassword.c_str(), 6, false, 1)) {
-    Serial.println("WIFI AP ERROR");
-    return;
-  }
-  if (!coreRoutesReady) {
-    coreConfigureWeb();
-    configureRoleRoutes();
-    coreRoutesReady = true;
-  }
-  web.begin();
-  coreApActive = true;
-  coreApStartMs = millis();
-  Serial.printf("Portal: SSID=%s PASS=%s IP=%s\n", coreApSsid.c_str(),
-                coreApPassword.c_str(), WiFi.softAPIP().toString().c_str());
-  coreWakeDisplay(permanent ? 30000 : PORTAL_WINDOW_MS);
-}
-
-void coreStopPortal() {
-  if (!coreApActive) return;
-  web.stop();
-  WiFi.softAPdisconnect(true);
-  WiFi.mode(WIFI_OFF);
-  coreApActive = false;
-  Serial.println("WiFi mantenimiento cerrado");
-}
-
-void coreTickPortal() {
-  if (!coreApActive) return;
-  web.handleClient();
-  if (coreRebootAtMs && (int32_t)(millis() - coreRebootAtMs) >= 0) ESP.restart();
-  if (!coreApPermanent && !coreOtaInProgress &&
-      millis() - coreApStartMs > PORTAL_WINDOW_MS) {
-    coreStopPortal();
-  }
-}
-
-void coreTickDisplay(bool onMains) {
-  if (!coreOledReady || !coreOledOn || (coreApActive && coreOtaInProgress)) return;
-  if (!onMains && (int32_t)(millis() - coreScreenUntilMs) >= 0) {
-    oled.setPowerSave(1);
-    coreOledOn = false;
-  }
-}
-
-void coreDisplayPortalIfNeeded() {
-  if (!coreApActive || !coreOledOn || coreOtaInProgress) return;
-  coreScreen("CONFIG WIFI / " + coreRole, coreApSsid, "Clave:", coreApPassword,
-             "192.168.4.1", coreApPermanent ? "Portal activo" : "Temporal: 3 min");
-}
-
-String signalText(float rssi, float snr, bool connected) {
-  if (!connected) return "SIN ENLACE";
-  // Qualitative guideline for SF9, not a calibrated range percentage.
-  if (rssi > -90.0f && snr > 5.0f) return "EXCELENTE";
-  if (rssi > -110.0f && snr > -5.0f) return "BUENA";
-  if (rssi > -123.0f && snr > -11.0f) return "DEBIL";
-  return "MUY DEBIL";
-}
-
-
+#include <RainCore.h>
+#include <Controls.h>
+#include <LittleFS.h>
 #include <esp_sleep.h>
 
-// --------- HARDWARE: Heltec V3 + MH-RD powered at 3V3 ----------
-constexpr uint8_t PIN_RAIN_AO = 4;      // ADC1, NOT GPIO34 (ESP32-S3).
-constexpr uint8_t PIN_RAIN_DO = 2;      // Optional diagnostics only.
-// Modes: TEST = frequent ADC sampling while awake; PRODUCTION = periodic deep sleep.
-constexpr uint32_t MIN_SLEEP_SECONDS = 60;
-constexpr uint32_t MAX_SLEEP_SECONDS = 3600;
-constexpr uint32_t SCREEN_REFRESH_MS = 1000;
-constexpr uint32_t TEST_HEARTBEAT_MS = 60000;
-constexpr uint32_t HELLO_RETRY_MS = 15000;
-constexpr uint32_t ACK_TIMEOUT_MS = 3000;
-constexpr uint32_t ACK_RETRY_GAP_MS = 4000;
-constexpr uint8_t MAX_ATTEMPTS = 3;
+constexpr uint8_t PIN_RAIN_AO=4, PIN_RAIN_DO=2;
+constexpr uint32_t ACK_TIMEOUT_MS=3000;
+RTC_DATA_ATTR uint32_t savedBoot=0, savedSeq=0, savedSignature=0;
+RTC_DATA_ATTR uint64_t savedSession=0;
+RTC_DATA_ATTR bool savedWet=false;
+constexpr uint32_t RTC_SIGNATURE=0x52414932;
+uint32_t senderBoot=0, txSequence=0;
+uint64_t sessionId=0, helloNonce=0;
+volatile bool rxInterrupt=false;
+rain::Detector detector;
+uint16_t analogRain=4095, rainOnThreshold=3500, rainOffThreshold=3900, batteryMv=0;
+int doLevel=-1, simulation=-1, batteryGate=0;
+uint32_t testSampleMs=50, confirmMs=0, heartbeatSeconds=90, sleepSeconds=120;
+bool doWakeEnabled=false, resumed=false;
+uint32_t eventId=0;
+bool eventPending=false;
+uint64_t lastSample=0, lastTx=0, lastAck=0, nextSend=0, ackStart=0, lastScreen=0;
+uint32_t helloBackoff=15000, attempts=0, sentStates=0, ackedStates=0, retries=0, ackTimeouts=0, authRejects=0;
+float lastRssi=-150, lastSnr=-20, remoteRssi=-150, remoteSnr=-20;
+uint64_t lastRtt=0;
+RainFrame pendingFrame{}, receiver{};
+bool pending=false, awaitingAck=false, rxKnown=false;
+bool configPending=false, resetPending=false;
+uint32_t requestedConfig=64, requestedLossSeconds=180;
+uint64_t requestedPulseMs=1000;
+bool fsReady=false, recording=false;
+File recordFile;
+uint64_t recordStarted=0, recordElapsed=0, lastRecordSnapshot=0;
+uint32_t recordRows=0;
+String recordError;
+String recordStartIso;
+String commandResult;
+constexpr size_t RECORD_LIMIT=1024*1024;
 
-// RTC variables survive deep sleep: avoid writing flash on every timer wake.
-RTC_DATA_ATTR uint32_t rtcSignature = 0;
-RTC_DATA_ATTR uint32_t rtcSenderBoot = 0;
-RTC_DATA_ATTR uint32_t rtcSeq = 0;
-RTC_DATA_ATTR uint64_t rtcSession = 0;
-RTC_DATA_ATTR uint8_t rtcLastWet = 0;
-constexpr uint32_t RTC_SIGNATURE = 0xC1A01025;
-
-bool productionMode = false;  // Power-saving mode DISABLED until calibrated.
-uint32_t testSampleMs = 200;  // continuous monitoring interval
-uint32_t sleepSeconds = 120;  // timer deep sleep in production
-bool doWakeEnabled = false;   // only after connecting and calibrating DO
-bool resumeFromSleep = false;
-int doLevel = -1;
-uint32_t bootAtMs = 0;
-volatile bool rxInterrupt = false;
-uint32_t senderBoot = 0;
-uint32_t txSequence = 0;
-uint64_t sessionId = 0;
-uint16_t analogRain = 4095;
-uint16_t rainOnThreshold = 3500;
-uint16_t rainOffThreshold = 3900;
-uint16_t batteryMv = 0;
-int8_t batteryGate = 0; // 0 = not identified; +1 active high (V3.2); -1 active low.
-bool wet = false;
-bool lastAckApplied = false;
-bool lastAckArmed = false;
-bool awaitingAck = false;
-bool pending = false;
-bool lastStateKnown = false;
-bool radioHealthy = false;
-uint32_t nextHelloMs = 0;
-uint32_t lastSampleMs = 0;
-uint32_t lastTxMs = 0;
-uint32_t lastAckMs = 0;
-uint32_t lastScreenMs = 0;
-uint32_t ackWaitMs = 0;
-uint32_t nextRetryMs = 0;
-uint32_t pendingSeq = 0;
-uint8_t attempts = 0;
-float lastAckRssi = -150.0f;
-float lastAckSnr = -20.0f;
-uint32_t failedAckCount = 0;
-uint32_t authRejectCount = 0;
-
-void IRAM_ATTR onRadioReceive() { rxInterrupt = true; }
-void beforeOta() {
-  // Alert receiver: move to the previously configured fail-safe state.
-  if (sessionId) {
-    RainFrame maintenance = newFrame(FRAME_MAINT, TX_ID, senderBoot,
-                                     ++txSequence, sessionId);
-    maintenance.wet = wet ? 1 : 0;
-    int16_t rc = transmitFrame(maintenance, onRadioReceive);
-    Serial.printf("MAINT safety frame status=%d\n", rc);
-  }
-  Serial.println("OTA TX: paused LoRa state updates during maintenance");
-}
-
-uint16_t readRain() {
-  uint32_t sum = 0;
-  for (int i = 0; i < 8; ++i) sum += analogRead(PIN_RAIN_AO);
-  return static_cast<uint16_t>(sum / 8);
-}
-
-// Battery divider is gated on GPIO37; gate polarity differs by V3 board revision.
-uint16_t sampleBatteryWithGate(bool high) {
-  pinMode(37, OUTPUT);
-  digitalWrite(37, high ? HIGH : LOW);
-  delay(3);
-  uint32_t v = 0;
-  for (uint8_t i = 0; i < 6; i++) v += analogReadMilliVolts(1);
-  return static_cast<uint16_t>((v / 6) * 4.9f);
-}
-
-void readBattery() {
-  if (batteryGate == 0) {
-    uint16_t hi = sampleBatteryWithGate(true);
-    uint16_t lo = sampleBatteryWithGate(false);
-    if (hi >= 2800 && hi <= 4400 && (lo < 2000 || lo > 4500)) batteryGate = +1;
-    else if (lo >= 2800 && lo <= 4400 && (hi < 2000 || hi > 4500)) batteryGate = -1;
-    else {
-      batteryMv = 0;  // Unknown: never invent battery values.
-      return;
-    }
-  }
-  batteryMv = sampleBatteryWithGate(batteryGate == +1);
-  digitalWrite(37, batteryGate == +1 ? LOW : HIGH); // Disable divider when idle.
-}
-
-bool saveBootCounter() {
+void IRAM_ATTR onRadioReceive() { rxInterrupt=true; }
+bool wetNow() { return simulation<0?detector.wet:simulation==1; }
+bool linkOk() { return lastAck && uptimeMs()-lastAck < (uint64_t)heartbeatSeconds*3000+10000; }
+bool saveEvent() {
   Preferences p;
-  if (!p.begin("rainboot", false)) return false;
-  uint32_t previous = p.getUInt("n", 0);
-  if (previous == UINT32_MAX) { p.end(); return false; }
-  senderBoot = previous + 1;
-  bool ok = p.putUInt("n", senderBoot) == sizeof(uint32_t);
-  p.end();
+  bool ok=p.begin("rainevent",false);
+  if(ok){ok=p.putULong64("state",((uint64_t)eventId<<1)|(eventPending?1:0))==8;p.end();}
+  if(!ok){coreMaintenance=true;recordError="Error al guardar evento; reiniciar";}
   return ok;
 }
-
-void loadThresholds() {
-  Preferences p;
-  p.begin("rainsensor", true);
-  rainOnThreshold = p.getUShort("on", 3500);
-  rainOffThreshold = p.getUShort("off", 3900);
-  p.end();
-  if (rainOnThreshold < 100 || rainOffThreshold > 4095 ||
-      rainOffThreshold < rainOnThreshold + 150) {
-    rainOnThreshold = 3500;
-    rainOffThreshold = 3900;
+void saveRecordMetadata() {
+  if(!fsReady)return;
+  File f=LittleFS.open("/experiment.meta","w");
+  if(f){f.println(recordStartIso);f.close();}
+}
+String recordFilename() {
+  String stamp=recordStartIso.length()?recordStartIso:"hora-desconocida";stamp.replace(":","-");
+  return "rain_"+stamp+"_"+u64(recordElapsed)+"ms.csv";
+}
+bool validIso(const String &s) {
+  if(s.length()!=24)return false;
+  for(size_t i=0;i<s.length();++i){char c=s[i];
+    if(i==4||i==7){if(c!='-')return false;}
+    else if(i==10){if(c!='T')return false;}
+    else if(i==13||i==16){if(c!=':')return false;}
+    else if(i==19){if(c!='.')return false;}
+    else if(i==23){if(c!='Z')return false;}
+    else if(c<'0'||c>'9')return false;
   }
+  return true;
 }
-
-void loadModeSettings() {
-  Preferences p;
-  p.begin("rainmode", true);
-  productionMode = p.getBool("prod", false);
-  testSampleMs = p.getUInt("sample", 200);
-  sleepSeconds = p.getUInt("sleep", 120);
-  doWakeEnabled = p.getBool("dowake", false);
-  p.end();
-  testSampleMs = constrain(testSampleMs, 50UL, 60000UL);
-  sleepSeconds = constrain(sleepSeconds, MIN_SLEEP_SECONDS, MAX_SLEEP_SECONDS);
+void recordEvent(const char *event) {
+  if (!recording || !recordFile) return;
+  uint64_t now=uptimeMs(); recordElapsed=now-recordStarted;
+  String line=recordStartIso+","+u64(recordElapsed)+","+event+","+String(analogRain)+","+String(doLevel)+","+String(wetNow())+","+String(simulation>=0)+","+
+    String(batteryMv)+","+(lastAck?u64(now-lastAck):String(""))+","+String(lastRssi,1)+","+String(lastSnr,1)+","+
+    String(coreTxCount)+","+String(ackedStates)+","+String(retries)+","+String(ackTimeouts)+","+String(lastRtt)+","+
+    String(rxKnown)+","+String(receiver.flags)+","+u64(receiver.remainingMs)+","+String(eventId)+","+String(eventPending)+","+
+    String(coreAirtime.used)+","+u64(coreDutyWaitMs())+","+String(remoteRssi,1)+","+String(remoteSnr,1)+","+
+    u64(receiver.pulseMs)+","+String(receiver.config)+","+String(lastAck?linkOk():false)+","+String(coreMaintenance)+"\n";
+  if(recordFile.size()+line.length()>RECORD_LIMIT) {
+    recordError="Memoria de grabacion llena";recordFile.flush();recordFile.close();recording=false;return;
+  }
+  if(recordFile.print(line)!=line.length()) {recordError="Error de escritura";recordFile.close();recording=false;return;}
+  ++recordRows; recordFile.flush();
 }
-
+void beforeOta() {
+  if(recording){recordEvent("record_stop_ota");recordFile.close();recording=false;}
+  // Informative only: RX applies its configured link-loss policy if updates stop.
+  if(sessionId) { auto f=newFrame(FRAME_MAINT,TX_ID,senderBoot,++txSequence,sessionId);transmitFrame(f,onRadioReceive); }
+}
+uint16_t readRain() { uint32_t sum=0;for(int i=0;i<8;++i)sum+=analogRead(PIN_RAIN_AO);return sum/8; }
+uint16_t sampleBattery(bool high) {
+  pinMode(37,OUTPUT);digitalWrite(37,high?HIGH:LOW);delay(3);
+  uint32_t value=0;for(int i=0;i<6;++i)value+=analogReadMilliVolts(1);return (value/6)*4.9f;
+}
+void readBattery() {
+  if(!batteryGate) {
+    uint16_t hi=sampleBattery(true),lo=sampleBattery(false);
+    if(hi>=2800 && hi<=4400 && (lo<2000 || lo>4500))batteryGate=1;
+    else if(lo>=2800 && lo<=4400 && (hi<2000 || hi>4500))batteryGate=-1;
+    else {batteryMv=0;digitalWrite(37,LOW);return;}
+  }
+  batteryMv=sampleBattery(batteryGate==1);digitalWrite(37,batteryGate==1?LOW:HIGH);
+}
+void loadSettings() {
+  Preferences p;p.begin("rainsensor",true);rainOnThreshold=p.getUShort("on",3500);rainOffThreshold=p.getUShort("off",3900);p.end();
+  if(rainOnThreshold>3900 || rainOffThreshold>4095 || rainOffThreshold<=rainOnThreshold){rainOnThreshold=3500;rainOffThreshold=3900;}
+  p.begin("rainmode",true);testSampleMs=p.getUInt("sample",50);sleepSeconds=p.getUInt("sleep",120);
+  heartbeatSeconds=p.getUInt("heartbeat",90);confirmMs=p.getUInt("confirm",0);doWakeEnabled=p.getBool("dowake",false);p.end();
+  testSampleMs=constrain(testSampleMs,10UL,60000UL);sleepSeconds=constrain(sleepSeconds,1UL,86400UL);
+  heartbeatSeconds=constrain(heartbeatSeconds,1UL,86400UL);confirmMs=constrain(confirmMs,0UL,60000UL);
+  p.begin("rainevent",true);uint64_t state=p.getULong64("state",0);eventId=state>>1;eventPending=state&1;p.end();
+}
+void queueState() {
+  // Do not mutate an in-flight packet. The current state is queued after its ACK.
+  if(pending || awaitingAck)return;
+  pendingFrame=newFrame(FRAME_STATE,TX_ID,senderBoot,++txSequence,sessionId);
+  pendingFrame.wet=wetNow();pendingFrame.ao=analogRain;pendingFrame.batteryMv=batteryMv;
+  pendingFrame.event=eventPending?eventId:0;
+  pendingFrame.ackSeq=corePrototype?heartbeatSeconds:sleepSeconds;
+  if(simulation>=0)pendingFrame.flags|=STATE_SIMULATED;
+  pending=true;attempts=0;nextSend=uptimeMs();
+}
+void latchRainEvent() {
+  // A single outstanding latch is sufficient for an activation; later episodes coalesce until delivery.
+  if(!eventPending){uint32_t previous=eventId;do{eventId=esp_random();}while(!eventId||eventId==previous);eventPending=true;saveEvent();}
+  recordEvent("rain_event");
+}
+void updateSensor(bool immediate=false) {
+  uint64_t now=uptimeMs();if(!immediate && now-lastSample<testSampleMs)return;lastSample=now;
+  bool oldWet=wetNow();analogRain=readRain();doLevel=digitalRead(PIN_RAIN_DO);
+  detector.sample(analogRain,rainOnThreshold,rainOffThreshold,now,corePrototype?0:confirmMs);
+  if(oldWet!=wetNow()) {if(wetNow())latchRainEvent();recordEvent("sensor_change");queueState();}
+}
 String roleControlsHtml() {
-  String h = F("<h2>Sensor</h2><form method='POST' action='/settings?token=");
-  h += coreCsrfToken;
-  h += F("'><label>LLUVIA si AO &lt;= <input name='on' type='number' min='100' max='3900' value='");
-  h += rainOnThreshold;
-  h += F("'></label><label>SECO si AO &gt;= <input name='off' type='number' min='200' max='4095' value='");
-  h += rainOffThreshold;
-  h += F("'></label><h2>Funcionamiento</h2><label>Modo <select name='prod'>");
-  h += String("<option value='0'") + (productionMode ? "" : " selected") + ">Prueba continua</option>";
-  h += String("<option value='1'") + (productionMode ? " selected" : "") + ">Produccion con sleep</option></select></label>";
-  h += F("<label>Lectura en pruebas (ms) <input type='number' name='sample' min='50' max='60000' value='");
-  h += testSampleMs;
-  h += F("'></label><label>Intervalo produccion (s) <input type='number' name='sleep' min='60' max='3600' value='");
-  h += sleepSeconds;
-  h += F("'></label><label><input type='checkbox' name='dowake' value='1'");
-  if (doWakeEnabled) h += " checked";
-  h += F("> Despertar por DO=LOW (solo si probado)</label>"
-         "<small>En produccion la deteccion periodicada puede demorarse hasta el intervalo seleccionado. "
-         "La entrada DO permite despertar antes si esta correctamente calibrada y alimentada.</small>"
-         "<p><button>Guardar configuracion</button></p></form>");
-  return h;
-}
-
-void configureRoleRoutes() {
-  web.on("/settings", HTTP_POST, []() {
-    if (!coreIsAuthenticated()) return;
-    if (web.arg("token") != coreCsrfToken) { web.send(403, "text/plain", "Token"); return; }
-    int on = web.arg("on").toInt(), off = web.arg("off").toInt();
-    int sample = web.arg("sample").toInt(), sleep = web.arg("sleep").toInt();
-    if (on < 100 || on > 3900 || off > 4095 || off < on + 150 ||
-        sample < 50 || sample > 60000 || sleep < (int)MIN_SLEEP_SECONDS ||
-        sleep > (int)MAX_SLEEP_SECONDS) {
-      web.send(400, "text/plain", "Configuracion invalida"); return;
-    }
-    rainOnThreshold = on; rainOffThreshold = off;
-    productionMode = web.arg("prod") == "1";
-    testSampleMs = sample; sleepSeconds = sleep;
-    doWakeEnabled = web.hasArg("dowake") && web.arg("dowake") == "1";
-    Preferences p;
-    p.begin("rainsensor", false); p.putUShort("on",on); p.putUShort("off",off); p.end();
-    p.begin("rainmode", false);
-    p.putBool("prod",productionMode); p.putUInt("sample",testSampleMs);
-    p.putUInt("sleep",sleepSeconds); p.putBool("dowake",doWakeEnabled); p.end();
-    Serial.printf("Config TX: prod=%d sample=%lu ms sleep=%lu s doWake=%d\n",
-                  productionMode,(unsigned long)testSampleMs,(unsigned long)sleepSeconds,doWakeEnabled);
-    web.sendHeader("Location", "/"); web.send(303,"text/plain","OK");
-  });
-}
-
-String getStatusJson() {
-  bool fresh = lastAckMs && millis() - lastAckMs < 180000UL;
-  int quality = signalQuality(lastAckRssi,lastAckSnr,fresh,
-                             (failedAckCount == 0 ? 100.0f :
-                             100.0f * (float)(txSequence) /
-                             (float)(txSequence + failedAckCount)));
-  String s = "{\"rol\":\"Emisor\",\"version\":\"" + String(FW_VERSION) +
-    "\",\"lluvia\":" + String(wet ? "true":"false") +
-    ",\"AO\":" + String(analogRain) +
-    ",\"DO\":" + String(doLevel) +
-    ",\"umbral_lluvia\":" + String(rainOnThreshold) +
-    ",\"umbral_seco\":" + String(rainOffThreshold) +
-    ",\"bateria_mV\":" + String(batteryMv) +
-    ",\"modo\":\"" + String(productionMode?"Produccion":"Prueba") + "\"" +
-    ",\"lectura_pruebas_ms\":" + String(testSampleMs) +
-    ",\"intervalo_produccion_s\":" + String(sleepSeconds) +
-    ",\"despertar_DO\":" + String(doWakeEnabled ? "true":"false") +
-    ",\"calidad_estim_pct\":" + (quality < 0 ? "null":String(quality)) +
-    ",\"RSSI_dBm\":" + String(lastAckRssi,1) +
-    ",\"SNR_dB\":" + String(lastAckSnr,1) +
-    ",\"ACK_reciente\":" + String(fresh?"true":"false") +
-    ",\"ACK_pendiente\":" + String(pending?"true":"false") +
-    ",\"fallos_ACK\":" + String(failedAckCount) +
-    ",\"rele_remoto_armado\":" + String(lastAckArmed?"true":"false") +
-    ",\"rechazos_auth\":" + String(authRejectCount) + "}";
+  String s=F("<section><h2>Experimento</h2><div class='actions'>"
+    "<button class='primary' id='startRecord' data-command='/record/start'>Grabar</button>"
+    "<button id='stopRecord' data-command='/record/stop'>Detener</button>"
+    "<a class='button' href='/record.csv' download>Descargar CSV</a></div><p id='recordState' aria-live='polite'>Sin grabación</p>"
+    "<small>Tiempo desde el inicio. Registro automático en el emisor, aunque se desconecte el móvil. "
+    "Una grabación, hasta 1 MiB; se detiene al llenar la memoria. No borra datos al reiniciar.</small></section>"
+    "<section><h2>Prueba de lluvia</h2><div class='actions'>"
+    "<button data-command='/simulate' data-value='wet'>Simular mojado</button>"
+    "<button data-command='/simulate' data-value='dry'>Simular seco</button>"
+    "<button data-command='/simulate' data-value='sensor'>Usar sensor físico</button></div>"
+    "<small>La simulación permanece hasta volver al sensor o reiniciar. Disponible solo en prototipo.</small></section>");
+  s+=F("<dialog id='replaceRecord'><h2>Grabación anterior</h2><p>Descarga el archivo anterior antes de sustituirlo.</p>"
+    "<div class='actions'><a class='button' href='/record.csv' download>Descargar anterior</a>"
+    "<button id='confirmRecord'>Sustituir y grabar</button><button id='cancelRecord'>Cancelar</button></div></dialog>"
+    "<details><summary>Preparar memoria de grabación</summary><form action='/record/prepare' data-save>"
+    "<p class='hint'>Solo si aparece memoria no preparada. Formatear elimina cualquier grabación de esta partición. "
+    "No cambia la configuración ni la clave.</p><label>Escribe BORRAR MEMORIA<input name='confirm' required></label><button>Preparar memoria</button></form></details>");
+  s+=pulseControls();
+  s+=F("<details><summary>Sensor y envío</summary><form action='/settings' data-save><div class='grid'>"
+    "<label>Mojado si AO ≤<input name='on' type='number' min='0' max='3900' value='3500' required></label>"
+    "<label>Seco si AO ≥<input name='off' type='number' min='1' max='4095' value='3900' required></label>"
+    "<label>Lectura despierto (ms)<input name='sample' type='number' min='10' max='60000' value='50' required></label>"
+    "<label>Confirmación producción (ms)<input name='confirm_ms' type='number' min='0' max='60000' value='0' required></label>"
+    "<label>Telemetría prototipo (s)<input name='heartbeat' type='number' min='1' max='86400' value='90' required></label>"
+    "<label>Sueño producción (s)<input name='sleep' type='number' min='1' max='86400' value='120' required></label>"
+    "<label>Despertar DO=LOW<select name='dowake'><option value='0'>Desactivado</option><option value='1'>Activado tras validar</option></select></label></div>"
+    "<p class='hint'>AO es lectura ADC, no intensidad de precipitación. Prototipo reacciona en la siguiente lectura. "
+    "Producción confirma al despertar y puede retrasarse hasta el intervalo de sueño. "
+    "Los envíos respetan el presupuesto de radio aunque el intervalo elegido sea menor.</p><button>Guardar</button></form></details>");
   return s;
 }
-
-void queueState() {
-  pending = true;
-  awaitingAck = false;
-  attempts = 0;
-  pendingSeq = ++txSequence;
-  nextRetryMs = millis();
+void configureRoleRoutes() {
+  web.on("/settings",HTTP_POST,[](){
+    if(!corePostAllowed())return;uint64_t on,off,sample,confirmation,heartbeat,sleep,dowake;
+    if(!readUnsigned("on",on)||!readUnsigned("off",off)||!readUnsigned("sample",sample)||!readUnsigned("confirm_ms",confirmation)||
+       !readUnsigned("heartbeat",heartbeat)||!readUnsigned("sleep",sleep)||!readUnsigned("dowake",dowake)||
+       on>3900||off>4095||off<=on||sample<10||sample>60000||confirmation>60000||heartbeat<1||heartbeat>86400||sleep<1||sleep>86400||dowake>1){web.send(400,"text/plain","Configuracion invalida");return;}
+    rainOnThreshold=on;rainOffThreshold=off;testSampleMs=sample;confirmMs=confirmation;heartbeatSeconds=heartbeat;sleepSeconds=sleep;doWakeEnabled=dowake;
+    Preferences p;p.begin("rainsensor",false);p.putUShort("on",on);p.putUShort("off",off);p.end();p.begin("rainmode",false);
+    p.putUInt("sample",sample);p.putUInt("confirm",confirmation);p.putUInt("heartbeat",heartbeat);p.putUInt("sleep",sleep);p.putBool("dowake",dowake);p.end();
+    recordEvent("sensor_config");web.send(200,"text/plain","Configuracion guardada");
+  });
+  web.on("/simulate",HTTP_POST,[](){
+    if(!corePostAllowed())return;if(!corePrototype){web.send(409,"text/plain","Solo en prototipo");return;}
+    String value=web.arg("value");if(value!="wet"&&value!="dry"&&value!="sensor"){web.send(400,"text/plain","Origen invalido");return;}
+    bool previous=wetNow();simulation=value=="sensor"?-1:value=="wet"?1:0;
+    if(!previous&&wetNow())latchRainEvent();queueState();recordEvent("simulation_change");web.send(200,"text/plain","Origen actualizado; pendiente de confirmacion LoRa");
+  });
+  web.on("/receiver",HTTP_POST,[](){
+    if(!corePostAllowed())return;uint64_t policy,loss,armed,polarity,seconds,duration;
+    if(!readUnsigned("policy",policy)||!readUnsigned("loss",loss)||!readUnsigned("armed",armed)||!readUnsigned("loss_seconds",seconds)||!readUnsigned("polarity",polarity)||
+       !readDuration(duration)||policy>2||loss>2||armed>1||polarity>1||seconds<1||seconds>UINT32_MAX/1000||
+       (armed&&web.arg("confirm")!="ARMAR")){web.send(400,"text/plain","Configuracion invalida o falta ARMAR");return;}
+    if(configPending||resetPending){web.send(409,"text/plain","Ya hay una orden pendiente");return;}
+    requestedConfig=armed|(policy<<1)|(loss<<3)|(polarity<<6);requestedPulseMs=duration;requestedLossSeconds=seconds;configPending=true;commandResult="Pendiente";
+    recordEvent("receiver_config_queued");web.send(202,"text/plain","Configuracion en cola. Comprueba config_pending hasta confirmacion.");
+  });
+  web.on("/reset-stop",HTTP_POST,[](){if(!corePostAllowed())return;if(configPending||resetPending){web.send(409,"text/plain","Orden pendiente");return;}
+    resetPending=true;commandResult="Pendiente";recordEvent("reset_queued");web.send(202,"text/plain","Rearme en cola; requiere seco y enlace vigente en receptor");});
+  web.on("/record/prepare",HTTP_POST,[](){
+    if(!corePostAllowed())return;
+    if(recording||fsReady||web.arg("confirm")!="BORRAR MEMORIA"){web.send(409,"text/plain","Memoria disponible, ocupada o confirmacion incorrecta");return;}
+    fsReady=LittleFS.format()&&LittleFS.begin(false);
+    if(fsReady){recordError="";recordStartIso="";recordRows=0;recordElapsed=0;}
+    web.send(fsReady?200:500,"text/plain",fsReady?"Memoria preparada":"No se pudo preparar la particion LittleFS");
+  });
+  web.on("/record/start",HTTP_POST,[](){
+    if(!corePostAllowed())return;if(!fsReady||!corePrototype){web.send(409,"text/plain","Grabacion requiere memoria disponible y modo prototipo");return;}
+    if(recording){web.send(409,"text/plain","Ya se esta grabando");return;}
+    if(LittleFS.exists("/experiment.csv")&&web.arg("replace")!="1"){web.send(409,"text/plain","Descarga o confirma sustituir la grabacion anterior");return;}
+    String iso=web.arg("start_iso");if(!validIso(iso)){web.send(400,"text/plain","Fecha de inicio invalida; recarga la interfaz");return;}
+    recordFile=LittleFS.open("/experiment.csv","w");if(!recordFile){web.send(500,"text/plain","No se pudo crear el archivo");return;}
+    recordFile.println("start_utc,elapsed_ms,event,ao,do,wet,simulated,battery_mv,ack_age_ms,rssi_dbm,snr_db,tx_packets,acked_states,retries,ack_timeouts,rtt_ms,rx_known,rx_flags,remaining_ms,event_id,event_pending,airtime_used_ms,duty_wait_ms,rx_rssi_dbm,rx_snr_db,pulse_ms,rx_config,link_ok,maintenance");
+    recordStartIso=iso;saveRecordMetadata();recordStarted=uptimeMs();recordRows=0;recordElapsed=0;recordError="";recording=true;recordEvent("record_start");web.send(200,"text/plain","Grabando");
+  });
+  web.on("/record/stop",HTTP_POST,[](){if(!corePostAllowed())return;if(recording){recordEvent("record_stop");recordFile.close();recording=false;}web.send(200,"text/plain","Grabacion detenida");});
+  web.on("/record.csv",HTTP_GET,[](){
+    if(!coreIsAuthenticated())return;if(!fsReady||!LittleFS.exists("/experiment.csv")){web.send(404,"text/plain","No hay grabacion");return;}
+    // Download a closed, consistent file; recording can be started again explicitly.
+    if(recording){recordEvent("record_stop_download");recordFile.close();recording=false;}
+    File f=LittleFS.open("/experiment.csv","r");web.sendHeader("Content-Disposition","attachment; filename=\""+recordFilename()+"\"");
+    web.streamFile(f,"text/csv; charset=utf-8");f.close();
+  });
 }
-
-void transmitHello() {
-  RainFrame hello = newFrame(FRAME_HELLO, TX_ID, senderBoot, 0);
-  int16_t rc = transmitFrame(hello, onRadioReceive);
-  Serial.printf("HELLO boot=%lu status=%d\n", (unsigned long)senderBoot, rc);
-  nextHelloMs = millis() + HELLO_RETRY_MS;
+String getStatusJson() {
+  String s="{\"role\":\"TX\",\"version\":\""+String(FW_VERSION)+"\",\"wet\":"+String(wetNow()?"true":"false")+
+    ",\"simulated\":"+String(simulation>=0?"true":"false")+",\"ao\":"+String(analogRain)+",\"do\":"+String(doLevel)+
+    ",\"battery_mv\":"+String(batteryMv)+",\"link_ok\":"+String(linkOk()?"true":"false")+
+    ",\"ack_age_ms\":"+(lastAck?u64(uptimeMs()-lastAck):String("null"))+",\"rssi_dbm\":"+String(lastRssi,1)+",\"snr_db\":"+String(lastSnr,1)+
+    ",\"rx_rssi_dbm\":"+String(remoteRssi,1)+",\"rx_snr_db\":"+String(remoteSnr,1)+",\"rtt_ms\":\""+u64(lastRtt)+"\""+
+    ",\"acked_states\":"+String(ackedStates)+",\"sent_states\":"+String(sentStates)+",\"retries\":"+String(retries)+",\"ack_timeouts\":"+String(ackTimeouts)+
+    ",\"auth_rejects\":"+String(authRejects)+",\"event_pending\":"+String(eventPending?"true":"false")+
+    ",\"config_pending\":"+String(configPending||resetPending?"true":"false")+",\"rx_known\":"+String(rxKnown?"true":"false")+
+    ",\"rx_active\":"+String(receiver.flags&ACK_STOP?"true":"false")+
+    ",\"rx_armed\":"+String(receiver.flags&ACK_RELAY_ARMED?"true":"false")+",\"rx_coil\":"+String(receiver.flags&ACK_COIL_ON?"true":"false")+
+    ",\"rx_maintenance\":"+String(receiver.flags&ACK_MAINTENANCE?"true":"false")+",\"rx_restored\":"+String(receiver.config&32?"true":"false")+
+    ",\"remaining_ms\":\""+u64(receiver.remainingMs)+"\",\"pulse_ms\":\""+u64(receiver.pulseMs)+"\""+
+    ",\"polarity\":"+String(receiver.config&64?1:0)+",\"command_result\":\""+commandResult+"\""+
+    ",\"policy\":"+String((receiver.config>>1)&3)+",\"loss\":"+String((receiver.config>>3)&3)+",\"loss_seconds\":"+u64(receiver.echo/1000)+
+    ",\"on\":"+String(rainOnThreshold)+",\"off\":"+String(rainOffThreshold)+",\"sample\":"+String(testSampleMs)+",\"confirm_ms\":"+String(confirmMs)+
+    ",\"heartbeat\":"+String(heartbeatSeconds)+",\"sleep\":"+String(sleepSeconds)+",\"dowake\":"+String(doWakeEnabled?1:0)+
+    ",\"recording\":"+String(recording?"true":"false")+",\"record_elapsed_ms\":\""+u64(recording?uptimeMs()-recordStarted:recordElapsed)+"\""+
+    ",\"record_start_utc\":\""+recordStartIso+"\",\"record_capacity_bytes\":"+String(RECORD_LIMIT)+",\"filesystem_ready\":"+String(fsReady?"true":"false")+
+    ",\"record_rows\":"+String(recordRows)+",\"record_error\":\""+recordError+"\""+
+    ",\"sf\":"+String(LORA_SF)+",\"frequency_mhz\":"+String(LORA_FREQUENCY_MHZ,1)+coreStatusFields()+"}";
+  return s;
 }
-
-void transmitState() {
-  RainFrame state = newFrame(FRAME_STATE, TX_ID, senderBoot, pendingSeq, sessionId);
-  state.wet = wet ? 1 : 0;
-  state.ao = analogRain;
-  state.batteryMv = batteryMv;
-  // In STATE frames ackSeq carries the planned status-report interval,
-  // allowing RX to distinguish a scheduled sleep from a lost link.
-  state.ackSeq = productionMode ? sleepSeconds : TEST_HEARTBEAT_MS / 1000;
-  if (productionMode) state.flags |= FRAME_FLAG_SLEEP;
-  if (doWakeEnabled) state.flags |= FRAME_FLAG_DO_WAKE;
-  int16_t rc = transmitFrame(state, onRadioReceive);
-  lastTxMs = millis();
-  attempts++;
-  if (rc != RADIOLIB_ERR_NONE) {
-    Serial.printf("TX error=%d\n", rc);
-    awaitingAck = false;
-    nextRetryMs = millis() + ACK_RETRY_GAP_MS;
-    return;
-  }
-  awaitingAck = true;
-  ackWaitMs = millis();
-  Serial.printf("STATE #%lu wet=%u AO=%u attempt=%u\n",
-                (unsigned long)pendingSeq, wet, analogRain, attempts);
-}
-
 void processReceived() {
-  if (!rxInterrupt) return;
-  rxInterrupt = false;
-  RainFrame f{};
-  if (!readFrame(f)) {
-    authRejectCount++;
-    radio.startReceive();
-    return;
-  }
-  float rssi = radio.getRSSI();
-  float snr = radio.getSNR();
-  if (f.sender != RX_ID) { radio.startReceive(); return; }
-  if (f.type == FRAME_CHALLENGE && f.session != 0) {
-    if (sessionId != f.session) {
-      sessionId = f.session;
-      Serial.println("Sesion radio sincronizada");
-      queueState();
+  if(!rxInterrupt)return;rxInterrupt=false;RainFrame f{};
+  if(!readFrame(f)){++authRejects;radio.startReceive();recordEvent("invalid_frame");return;}
+  if(f.sender!=RX_ID){radio.startReceive();return;}
+  if(f.type==FRAME_CHALLENGE&&f.session&&f.echo==helloNonce){
+    if(sessionId!=f.session){sessionId=f.session;pending=false;awaitingAck=false;queueState();recordEvent("session_ready");}
+  }else if(f.type==FRAME_ACK&&sessionId&&f.session==sessionId&&f.ackSeq==pendingFrame.seq&&awaitingAck){
+    lastRssi=radio.getRSSI();lastSnr=radio.getSNR();remoteRssi=f.peerRssi10/10.0f;remoteSnr=f.peerSnr10/10.0f;
+    lastAck=uptimeMs();lastRtt=lastAck-ackStart;receiver=f;rxKnown=true;
+    if(pendingFrame.type==FRAME_STATE){++ackedStates;
+      if(eventPending&&f.event==eventId){eventPending=false;if(!saveEvent())eventPending=true;}
+    }else if(f.flags&(ACK_CONFIG|ACK_REJECTED)){
+      configPending=false;resetPending=false;commandResult=f.flags&ACK_CONFIG?"Confirmada":"Rechazada por el receptor";
+      recordEvent(f.flags&ACK_CONFIG?"receiver_config_confirmed":"receiver_command_rejected");
     }
-  } else if (f.type == FRAME_ACK && f.session == sessionId &&
-             f.ackSeq == pendingSeq && awaitingAck) {
-    awaitingAck = false;
-    pending = false;
-    radioHealthy = true;
-    lastAckMs = millis();
-    lastAckRssi = rssi;
-    lastAckSnr = snr;
-    lastAckArmed = f.flags & ACK_RELAY_ARMED;
-    lastAckApplied = f.flags & ACK_APPLIED_GPIO;
-    Serial.printf("ACK #%lu RSSI=%.1f SNR=%.1f armed=%d gpio=%d\n",
-                  (unsigned long)pendingSeq, rssi, snr,
-                  lastAckArmed, lastAckApplied);
+    pending=false;awaitingAck=false;helloBackoff=15000;recordEvent("ack");
+    if(pendingFrame.type==FRAME_STATE&&(pendingFrame.wet!=wetNow()||pendingFrame.event!=(eventPending?eventId:0)||bool(pendingFrame.flags&STATE_SIMULATED)!=(simulation>=0)))queueState();
   }
   radio.startReceive();
 }
-
-void updateSensor() {
-  if (millis() - lastSampleMs < testSampleMs) return;
-  lastSampleMs = millis();
-  analogRain = readRain();
-  doLevel = digitalRead(PIN_RAIN_DO);
-  bool newWet = wet;
-  if (!wet && analogRain <= rainOnThreshold) newWet = true;
-  else if (wet && analogRain >= rainOffThreshold) newWet = false;
-  if (!lastStateKnown || newWet != wet) {
-    wet = newWet;
-    lastStateKnown = true;
-    queueState();
-    coreWakeDisplay(45000);
-    Serial.printf("RAIN EVENT wet=%u AO=%u\n", wet, analogRain);
+void serviceRadio() {
+  if(coreMaintenance)return;uint64_t now=uptimeMs();
+  if(awaitingAck&&now-ackStart>=ACK_TIMEOUT_MS){awaitingAck=false;++ackTimeouts;nextSend=now+4000;recordEvent("ack_timeout");}
+  if(awaitingAck||now<nextSend)return;
+  uint64_t duty=coreDutyWaitMs();if(duty){nextSend=now+duty;return;}
+  if(!sessionId){
+    auto f=newFrame(FRAME_HELLO,TX_ID,senderBoot,0,helloNonce);
+    int16_t rc=transmitFrame(f,onRadioReceive);recordEvent(rc==RADIOLIB_ERR_NONE?"hello":"hello_error");
+    nextSend=now+helloBackoff;helloBackoff=constrain(helloBackoff*2,15000UL,300000UL);return;
   }
-}
-
-void drawStatus() {
-  if (millis() - lastScreenMs < SCREEN_REFRESH_MS) return;
-  lastScreenMs = millis();
-  if (coreApActive && millis() - coreApStartMs < 30000) {
-    coreDisplayPortalIfNeeded(); return;
+  if(!pending&&(configPending||resetPending)){
+    pendingFrame=newFrame(FRAME_CONFIG,TX_ID,senderBoot,++txSequence,sessionId);
+    pendingFrame.config=requestedConfig;pendingFrame.pulseMs=requestedPulseMs;pendingFrame.echo=(uint64_t)requestedLossSeconds*1000;
+    pendingFrame.flags=resetPending?1:0;pending=true;attempts=0;
   }
-  bool fresh = lastAckMs && millis() - lastAckMs < 180000UL;
-  float delivery = failedAckCount == 0 ? 100.0f :
-       100.0f * (float)txSequence / (float)(txSequence + failedAckCount);
-  int quality = signalQuality(lastAckRssi,lastAckSnr,fresh,delivery);
-  String q = quality < 0 ? "--%" : String(quality) + "%*";
-  String bat = batteryMv ? String(batteryMv/1000.0f,2)+"V" : "--";
-  coreScreen("SENSOR LLUVIA / TX", wet ? "LLUVIA" : "SECO",
-             "CALIDAD: " + q,
-             "RSSI:" + String(lastAckRssi,0) + " SNR:" + String(lastAckSnr,1),
-             "AO:" + String(analogRain) + " BAT:" + bat,
-             String(productionMode?"PROD":"TEST") +
-             (pending ? " TX PENDIENTE" : " ACK OK"));
+  if(!pending&&now-lastTx>=(uint64_t)heartbeatSeconds*1000)queueState();
+  if(!pending)return;
+  if(attempts>=3){sessionId=0;helloNonce=random64();if(!helloNonce)helloNonce=1;pending=false;awaitingAck=false;nextSend=now+helloBackoff;recordEvent("session_retry");return;}
+  pendingFrame.session=sessionId;int16_t rc=transmitFrame(pendingFrame,onRadioReceive);
+  if(rc==-32000){nextSend=now+coreDutyWaitMs();return;}
+  if(attempts++)++retries;if(pendingFrame.type==FRAME_STATE)++sentStates;
+  lastTx=uptimeMs();recordEvent(rc==RADIOLIB_ERR_NONE?"tx":"tx_error");
+  if(rc==RADIOLIB_ERR_NONE){awaitingAck=true;ackStart=uptimeMs();}else nextSend=now+4000;
 }
-
-void sleepUntilNextCheck() {
-  if (!productionMode || coreApActive || coreOtaInProgress || pending || awaitingAck) return;
-  if ((millis() - bootAtMs) < 2500) return;
-  Serial.printf("Deep sleep: %lu s; DO=%d, wet=%d\n",
-                (unsigned long)sleepSeconds, doLevel, wet);
-  rtcSignature=RTC_SIGNATURE; rtcSenderBoot=senderBoot;
-  rtcSeq=txSequence; rtcSession=sessionId; rtcLastWet=wet?1:0;
-  radio.sleep();
-  oled.setPowerSave(1);
-  digitalWrite(VEXT_CTRL, HIGH); // OLED power OFF, MH-RD must use 3V3 not Vext.
-  WiFi.mode(WIFI_OFF);
-  esp_sleep_enable_timer_wakeup((uint64_t)sleepSeconds*1000000ULL);
-  if (doWakeEnabled && !wet && digitalRead(PIN_RAIN_DO)==HIGH) {
-    // GPIO2 = RTC-capable on ESP32-S3; LM393 DO must go LOW on rain.
-    esp_sleep_enable_ext1_wakeup_io(1ULL << PIN_RAIN_DO, ESP_EXT1_WAKEUP_ANY_LOW);
-  }
-  Serial.flush();
-  esp_deep_sleep_start();
-}
-
 void setup() {
-  Serial.begin(115200);
-  delay(350);
-  bootAtMs = millis();
-  coreRole = "TX";
-  coreInitDisplay();
-  pinMode(PIN_RAIN_AO, INPUT);
-  pinMode(PIN_RAIN_DO, INPUT_PULLUP);
-  analogReadResolution(12);
-  analogSetPinAttenuation(PIN_RAIN_AO, ADC_11db);
-  loadThresholds(); loadModeSettings();
-  esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
-  resumeFromSleep = rtcSignature == RTC_SIGNATURE &&
-      (cause==ESP_SLEEP_WAKEUP_TIMER || cause==ESP_SLEEP_WAKEUP_EXT1);
-  if (resumeFromSleep) {
-    senderBoot=rtcSenderBoot; txSequence=rtcSeq;
-    sessionId=rtcSession; wet=rtcLastWet!=0;
-    lastStateKnown=true;
-  } else {
-    if (!saveBootCounter()) {
-      Serial.println("FATAL: NVS contador");
-      coreScreen("ERROR NVS", "No transmite", "", "", "", "");
-      while(true) delay(1000);
-    }
-    rtcSignature=RTC_SIGNATURE;
-    sessionId=0; txSequence=0;
+  Serial.begin(115200);coreRole="TX";coreLoadDevice();loadSettings();coreInitDisplay();
+  pinMode(PIN_RAIN_AO,INPUT);pinMode(PIN_RAIN_DO,INPUT_PULLUP);analogReadResolution(12);analogSetPinAttenuation(PIN_RAIN_AO,ADC_11db);
+  auto cause=esp_sleep_get_wakeup_cause();resumed=savedSignature==RTC_SIGNATURE&&(cause==ESP_SLEEP_WAKEUP_TIMER||cause==ESP_SLEEP_WAKEUP_EXT1);
+  senderBoot=resumed?savedBoot:esp_random();txSequence=resumed?savedSeq:0;sessionId=resumed?savedSession:0;
+  helloNonce=random64();if(!helloNonce)helloNonce=1;
+  detector.wet=resumed?savedWet:false;detector.candidate=detector.wet;
+  if(!initRadio(onRadioReceive)){coreScreen("ERROR RADIO","Reiniciar para probar","","","","");while(true)delay(1000);}
+  // Never format an existing filesystem automatically. The portal requires explicit confirmation.
+  fsReady=LittleFS.begin(false);if(!fsReady)recordError="Memoria no preparada";
+  if(fsReady&&LittleFS.exists("/experiment.csv")){
+    File meta=LittleFS.open("/experiment.meta","r");if(meta){recordStartIso=meta.readStringUntil('\n');recordStartIso.trim();if(!validIso(recordStartIso))recordStartIso="";meta.close();}
+    File f=LittleFS.open("/experiment.csv","r");bool header=true;while(f.available()){String row=f.readStringUntil('\n');if(header){header=false;continue;}int comma=row.indexOf(','),end=row.indexOf(',',comma+1);uint64_t elapsed;
+      if(comma>0&&end>comma&&rain::decimal(row.substring(comma+1,end).c_str(),elapsed)){recordElapsed=elapsed;++recordRows;}}f.close();
   }
-  analogRain=readRain(); doLevel=digitalRead(PIN_RAIN_DO);
-  if (!resumeFromSleep) {
-    // Conservative when the first value falls into the hysteresis zone.
-    wet = analogRain < rainOffThreshold;
-    lastStateKnown = true;
-  } else {
-    if (!wet && analogRain <= rainOnThreshold) wet=true;
-    if (wet && analogRain >= rainOffThreshold) wet=false;
-  }
-  readBattery();
-  if (!initRadio(onRadioReceive)) {
-    coreScreen("ERROR RADIO", "Revisar radio", "", "", "", "");
-    while(true) delay(1000);
-  }
-  // Timer wake-ups MUST NOT reopen the WiFi AP (battery + secure 3-minute window).
-  if (!resumeFromSleep) coreStartPortal(false);
-  Serial.printf("TX %s, modo=%s, AO=%u, wet=%d, boot=%lu, wake=%d\n",
-        FW_VERSION, productionMode?"PROD":"TEST", analogRain, wet,
-        (unsigned long)senderBoot,(int)cause);
-  lastSampleMs=millis()-testSampleMs;
-  lastTxMs=0;
-  if (sessionId) queueState();
-  else nextHelloMs=0;
+  updateSensor(true);readBattery();
+  if(!resumed)coreStartPortal(false);if(sessionId)queueState();nextSend=uptimeMs();
 }
-
 void loop() {
-  coreTickPortal();
-  coreTickDisplay(false);
-  processReceived();
-  updateSensor();
-
-  static uint32_t lastBatteryMs=0;
-  if (millis()-lastBatteryMs > 30000UL) {
-    lastBatteryMs=millis(); readBattery();
+  coreTickPortal();coreTickDisplay(false);processReceived();
+  static bool previousPrototype=corePrototype;
+  if(previousPrototype&&!corePrototype){bool old=wetNow();simulation=-1;if(!old&&wetNow())latchRainEvent();
+    if(recording){recordEvent("record_stop_mode");recordFile.close();recording=false;}queueState();}
+  previousPrototype=corePrototype;
+  if(!coreMaintenance)updateSensor();serviceRadio();
+  uint64_t now=uptimeMs();static uint64_t lastBattery=0;
+  if(!coreMaintenance&&now-lastBattery>=30000){lastBattery=now;readBattery();}
+  if(recording&&now-lastRecordSnapshot>=1000){lastRecordSnapshot=now;recordEvent("sample");}
+  if(now-lastScreen>=1000){lastScreen=now;
+    if(coreApActive&&now<30000)coreDisplayPortalIfNeeded();else coreScreen("RAIN LINK / TX",wetNow()?"MOJADO":"SECO",simulation>=0?"SIMULACION":"SENSOR",
+      linkOk()?"ACK OK":"SIN CONFIRMACION","RSSI "+String(lastRssi,0),recording?"GRABANDO":"");}
+  if(!corePrototype&&!coreApActive&&!coreMaintenance&&!recording&&!awaitingAck&&
+     ((!pending&&sessionId)||(!sessionId&&now>20000))&&now>2500&&now>=confirmMs+500){
+    savedSignature=RTC_SIGNATURE;savedBoot=senderBoot;savedSeq=txSequence;savedSession=sessionId;savedWet=detector.wet;
+    radio.sleep();oled.setPowerSave(1);digitalWrite(VEXT_CTRL,HIGH);WiFi.mode(WIFI_OFF);
+    esp_sleep_enable_timer_wakeup((uint64_t)sleepSeconds*1000000);
+    if(doWakeEnabled&&!detector.wet&&digitalRead(PIN_RAIN_DO)==HIGH)esp_sleep_enable_ext1_wakeup_io(1ULL<<PIN_RAIN_DO,ESP_EXT1_WAKEUP_ANY_LOW);
+    esp_deep_sleep_start();
   }
-  if (!sessionId) {
-    if (millis() >= nextHelloMs && !coreOtaInProgress) transmitHello();
-  } else {
-    if (!pending && millis()-lastTxMs >= TEST_HEARTBEAT_MS &&
-        !productionMode) queueState();
-    if (awaitingAck && millis()-ackWaitMs >= ACK_TIMEOUT_MS) {
-      awaitingAck=false;
-      failedAckCount++;
-      nextRetryMs=millis()+ACK_RETRY_GAP_MS;
-      Serial.printf("ACK timeout #%lu\n",(unsigned long)pendingSeq);
-    }
-    if (pending && !awaitingAck && !coreOtaInProgress && millis()>=nextRetryMs) {
-      if (attempts < MAX_ATTEMPTS) transmitState();
-      else {
-        Serial.printf("Sin ACK #%lu; recuperando sesion\n",(unsigned long)pendingSeq);
-        pending=false;
-        sessionId=0;
-        nextHelloMs=millis();
-        lastTxMs=millis();
-        radioHealthy=false;
-      }
-    }
-  }
-  // In production avoid indefinite awake on a dead receiver.
-  if (productionMode && !coreApActive && !coreOtaInProgress &&
-      ((sessionId && !pending && !awaitingAck) ||
-       (!sessionId && millis()-bootAtMs > 18000UL))) {
-    if (!sessionId) { pending=false; awaitingAck=false; }
-    sleepUntilNextCheck();
-  }
-  drawStatus();
-  delay(5);
+  delay(1);
 }
