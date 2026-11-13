@@ -1,5 +1,9 @@
 name: Firmware checks
-on: [push, pull_request, workflow_dispatch]
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
@@ -13,6 +17,12 @@ jobs:
           /tmp/rain-logic-test
           node tests/portal_test.mjs
       - uses: arduino/setup-arduino-cli@v2
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.arduino15
+            ~/Arduino/libraries
+          key: arduino-${{ runner.os }}-esp32-3.3.2-radio-7.8.1-u8g2-2.36.17
       - name: Install pinned build dependencies
         run: |
           arduino-cli core update-index --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json

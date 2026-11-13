@@ -152,7 +152,7 @@ void processReceived(){
     highestSeq=f.seq;lastFresh=uptimeMs();haveState=true;commsLost=false;lastRain=f.wet;simulated=f.flags&STATE_SIMULATED;
     lastAO=f.ao;lastBatteryMv=f.batteryMv;lastRssi=radio.getRSSI();lastSnr=radio.getSNR();++rxCount;
     bool event=f.event&&f.event!=lastEvent;bool wasActive=pulse.active;
-    pulse.observe(lastRain,event,lastFresh);if(event){lastEvent=f.event;persistDirty=true;}
+    pulse.observe(lastRain,event,lastFresh);pulse.tick(lastFresh,true);if(event){lastEvent=f.event;persistDirty=true;}
     if(pulse.active!=wasActive)persistDirty=true;applyControl();
   }
   if(persistDirty&&!persistSettings()){coreMaintenance=true;ControlGuard lock;setPhysicalCoil(false);}

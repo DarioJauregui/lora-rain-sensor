@@ -289,7 +289,7 @@ void setup() {
   detector.wet=resumed?savedWet:false;detector.candidate=detector.wet;
   if(!initRadio(onRadioReceive)){coreScreen("ERROR RADIO","Reiniciar para probar","","","","");while(true)delay(1000);}
   // Never format an existing filesystem automatically. The portal requires explicit confirmation.
-  fsReady=LittleFS.begin(false);if(!fsReady)recordError="Memoria no preparada";
+  fsReady=!resumed&&LittleFS.begin(false);if(!fsReady&&!resumed)recordError="Memoria no preparada";
   if(fsReady&&LittleFS.exists("/experiment.csv")){
     File f=LittleFS.open("/experiment.csv","r");bool header=true;while(f.available()){String row=f.readStringUntil('\n');if(header){header=false;continue;}int comma=row.indexOf(','),end=row.indexOf(',',comma+1);uint64_t elapsed;
       if(comma>0&&end>comma&&validIso(row.substring(0,comma))&&rain::decimal(row.substring(comma+1,end).c_str(),elapsed)){recordStartIso=row.substring(0,comma);recordElapsed=elapsed;++recordRows;}}f.close();
