@@ -21,6 +21,15 @@ inline bool duration(uint64_t h, uint64_t m, uint64_t s, uint64_t ms, uint64_t &
   return true;
 }
 
+struct PendingRain {
+  uint32_t id = 0;
+  bool pending = false;
+  void raise(uint32_t next) { if (!pending && next) { id=next; pending=true; } }
+  bool acknowledge(uint32_t received) {
+    if (!pending || received!=id) return false;
+    pending=false; return true;
+  }
+};
 struct Detector {
   bool wet = false, candidate = false;
   uint64_t since = 0;
@@ -33,7 +42,16 @@ struct Detector {
 };
 
 enum PulsePolicy : uint8_t { PER_EPISODE = 0, EXTEND_WHILE_WET = 1, REPEAT_WHILE_WET = 2 };
-enum LossPolicy : uint8_t { HOLD_OUTPUT = 0, FORCE_STOP = 1, RELEASE_STOP = 2 };
+enum LossPolicy : uint8_t { HOLD_OUTPUT = 0, FORCE_ACTIVE = 1, FORCE_INACTIVE = 2 };
+inline bool outputCoil(bool maintenance, bool armed, bool haveState, bool lost,
+                       uint8_t loss, bool active, bool activeCoil, bool previous) {
+  if (maintenance || !armed || !haveState) return false;
+  if (lost) {
+    if (loss == HOLD_OUTPUT) return previous;
+    active = loss == FORCE_ACTIVE;
+  }
+  return active ? activeCoil : !activeCoil;
+}
 struct Pulse {
   uint64_t durationMs = 1000, since = 0;
   bool active = false, wasWet = false, restored = false;

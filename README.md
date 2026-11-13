@@ -47,13 +47,13 @@ Columnas: tiempo, evento, AO/DO, estado y origen, batería, antigüedad del ACK,
 
 ## Radio y recuperación
 
-868,3 MHz, BW125, SF9, CR4/5, 10 dBm. HMAC-SHA256 truncado a 128 bits; autentica, no cifra. Sesión con desafío aleatorio ligado a un nonce del emisor y números de secuencia. No depende de contadores crecientes en flash: borrar ajustes del emisor no lo bloquea por tener un contador menor. La clave compartida debe seguir coincidiendo.
+868,3 MHz, BW125, SF7, CR4/5, 10 dBm. HMAC-SHA256 truncado a 128 bits; autentica, no cifra. Sesión con desafío aleatorio ligado a un nonce del emisor y números de secuencia. No depende de contadores crecientes en flash: borrar ajustes del emisor no lo bloquea por tener un contador menor. La clave compartida debe seguir coincidiendo.
 
 La lluvia pendiente se conserva hasta recibir confirmación, aunque el sensor vuelva a seco. Se guarda en NVS al producirse y confirmarse el evento; varios episodios durante una interrupción se agrupan en una activación pendiente. Las retransmisiones conservan el contenido y secuencia originales; no sustituyen un evento en vuelo.
 
 Se calcula el tiempo de emisión con RadioLib y se aplica un presupuesto de **30 segundos en cualquier ventana móvil de una hora**, por nodo. El historial se conserva en RAM RTC durante deep sleep. Reiniciar por pérdida de alimentación reinicia este historial; el límite es una protección de ingeniería y no una certificación de conformidad radioeléctrica. Las búsquedas sin receptor se espacian progresivamente. Se muestra la espera por presupuesto en la interfaz; no se presenta como fallo de cobertura.
 
-El intervalo de informes por defecto es 90 s para dejar margen a eventos y reintentos con SF9. Reducirlo acelera los intercambios mientras quede presupuesto; puede provocar esperas posteriores. RSSI/SNR y confirmaciones son mediciones; no se ofrece un porcentaje ficticio de cobertura.
+El intervalo de informes por defecto es 30 s para dejar margen a eventos y reintentos con SF7. Reducirlo acelera los intercambios mientras quede presupuesto; puede provocar esperas posteriores. RSSI/SNR y confirmaciones son mediciones; no se ofrece un porcentaje ficticio de cobertura.
 
 Referencias de implementación: [tiempo de emisión de RadioLib](https://jgromes.github.io/RadioLib/class_s_x126x.html) y [reloj RTC durante suspensión de ESP32-S3](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/api-reference/system/system_time.html).
 

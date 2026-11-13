@@ -14,6 +14,28 @@ int main() {
   assert(!rain::duration(0, 60, 0, 0, n));
   assert(!rain::duration(0, 0, 0, 1000, n));
 
+  for (bool active : {false,true}) for (bool polarity : {false,true}) for (bool previous : {false,true}) {
+    // OTA gate overrides every state, including configured link-loss actions.
+    for (uint8_t loss : {0,1,2}) {
+      assert(!rain::outputCoil(true,true,true,false,loss,active,polarity,previous));
+      assert(!rain::outputCoil(true,true,true,true,loss,active,polarity,previous));
+      assert(!rain::outputCoil(false,false,true,true,loss,active,polarity,previous));
+      assert(!rain::outputCoil(false,true,false,true,loss,active,polarity,previous));
+    }
+    assert(rain::outputCoil(false,true,true,true,rain::HOLD_OUTPUT,active,polarity,previous)==previous);
+    assert(rain::outputCoil(false,true,true,true,rain::FORCE_ACTIVE,active,polarity,previous)==polarity);
+    assert(rain::outputCoil(false,true,true,true,rain::FORCE_INACTIVE,active,polarity,previous)==!polarity);
+    assert(rain::outputCoil(false,true,true,false,0,active,polarity,previous)==(active?polarity:!polarity));
+  }
+  rain::PendingRain delivery;
+  delivery.raise(42); assert(delivery.pending && delivery.id==42);
+  delivery.raise(43); assert(delivery.id==42); // dry/new wet cannot erase an undelivered episode
+  assert(!delivery.acknowledge(43) && delivery.pending);
+  auto rebootedDelivery=delivery; // serialized to NVS by TX, independent of radio session
+  assert(rebootedDelivery.pending && rebootedDelivery.acknowledge(42));
+  assert(!rebootedDelivery.pending);
+  assert(!rebootedDelivery.acknowledge(42));
+  rebootedDelivery.raise(44); assert(rebootedDelivery.id==44 && rebootedDelivery.pending);
   rain::Detector sensor;
   assert(!sensor.sample(3400, 3500, 3900, 0, 200));
   assert(!sensor.sample(4000, 3500, 3900, 100, 200));

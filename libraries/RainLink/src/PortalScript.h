@@ -24,10 +24,11 @@ function paint(d){
   $('age').textContent=age===null?'Aún sin respuesta':`${(Number(age)/1000).toFixed(1)} s desde la respuesta`;
   $('rain').textContent=d.wet?'Mojado':'Seco';$('source').textContent=d.simulated?'Simulación activa':'Sensor físico';
   $('relay').textContent=(tx&&!d.rx_known)?'Sin datos':d.rx_maintenance?'Mantenimiento':!d.rx_armed?'Desarmada':d.rx_active?'Activado':'Inactivo';
-  $('remaining').textContent=(tx&&!fresh)?'Último estado comunicado':d.rx_restored?'Rearme manual pendiente':`Bobina ${d.rx_coil?'ON':'OFF'} · ${durationText(d.remaining_ms)}`;
+  $('remaining').textContent=(tx&&!fresh)?'Último estado comunicado':d.rx_restored?'Rearme manual pendiente':`Bobina ${d.rx_coil?'ON':'OFF'} · ${durationText(d.remaining_ms)}${tx?' al recibir ACK':''}`;
   $('signal').textContent=age===null?'—':`${d.rssi_dbm} dBm`;$('snr').textContent=age===null?'—':`SNR ${d.snr_db} dB`;
   $('radioNote').textContent=BigInt(d.duty_wait_ms||0)>0?`Radio en espera por tiempo de emisión: ${Math.ceil(Number(d.duty_wait_ms)/1000)} s. Los eventos pendientes se conservan.`:`Radio: SF${d.sf}, ${d.frequency_mhz} MHz · ${d.airtime_ms} ms por trama. Las lecturas cambian con cada intercambio.`;
   $('connection').textContent='Wi-Fi conectado · datos actualizados';
+  if($('receiverCommand'))$('receiverCommand').textContent=d.config_pending?'Pendiente de confirmar':d.command_result||'';
   if($('recordState')){
     $('recordState').textContent=d.recording?`Grabando · ${durationText(d.record_elapsed_ms)} · ${d.record_rows} filas`:`${d.record_rows} filas · ${d.record_error||'Detenido'}`;
     $('startRecord').disabled=d.recording||d.filesystem_ready===false||!d.prototype;$('stopRecord').disabled=!d.recording;

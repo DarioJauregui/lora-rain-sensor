@@ -17,14 +17,13 @@ volatile bool rxInterrupt=false;
 rain::Detector detector;
 uint16_t analogRain=4095, rainOnThreshold=3500, rainOffThreshold=3900, batteryMv=0;
 int doLevel=-1, simulation=-1, batteryGate=0;
-uint32_t testSampleMs=50, confirmMs=0, heartbeatSeconds=90, sleepSeconds=120;
+uint32_t testSampleMs=50, confirmMs=0, heartbeatSeconds=30, sleepSeconds=120;
 bool doWakeEnabled=false, resumed=false;
-uint32_t eventId=0;
-bool eventPending=false;
+rain::PendingRain rainEvent;
 uint64_t lastSample=0, lastTx=0, lastAck=0, nextSend=0, ackStart=0, lastScreen=0;
 uint32_t helloBackoff=15000, attempts=0, sentStates=0, ackedStates=0, retries=0, ackTimeouts=0, authRejects=0;
 float lastRssi=-150, lastSnr=-20, remoteRssi=-150, remoteSnr=-20;
-uint64_t lastRtt=0;
+uint64_t lastRtt=0, txStarted=0;
 RainFrame pendingFrame{}, receiver{};
 bool pending=false, awaitingAck=false, rxKnown=false;
 bool configPending=false, resetPending=false;
@@ -45,14 +44,9 @@ bool linkOk() { return lastAck && uptimeMs()-lastAck < (uint64_t)heartbeatSecond
 bool saveEvent() {
   Preferences p;
   bool ok=p.begin("rainevent",false);
-  if(ok){ok=p.putULong64("state",((uint64_t)eventId<<1)|(eventPending?1:0))==8;p.end();}
+  if(ok){ok=p.putULong64("state",((uint64_t)rainEvent.id<<1)|(rainEvent.pending?1:0))==8;p.end();}
   if(!ok){coreMaintenance=true;recordError="Error al guardar evento; reiniciar";}
   return ok;
-}
-void saveRecordMetadata() {
-  if(!fsReady)return;
-  File f=LittleFS.open("/experiment.meta","w");
-  if(f){f.println(recordStartIso);f.close();}
 }
 String recordFilename() {
   String stamp=recordStartIso.length()?recordStartIso:"hora-desconocida";stamp.replace(":","-");
@@ -76,7 +70,7 @@ void recordEvent(const char *event) {
   String line=recordStartIso+","+u64(recordElapsed)+","+event+","+String(analogRain)+","+String(doLevel)+","+String(wetNow())+","+String(simulation>=0)+","+
     String(batteryMv)+","+(lastAck?u64(now-lastAck):String(""))+","+String(lastRssi,1)+","+String(lastSnr,1)+","+
     String(coreTxCount)+","+String(ackedStates)+","+String(retries)+","+String(ackTimeouts)+","+String(lastRtt)+","+
-    String(rxKnown)+","+String(receiver.flags)+","+u64(receiver.remainingMs)+","+String(eventId)+","+String(eventPending)+","+
+    String(rxKnown)+","+String(receiver.flags)+","+u64(receiver.remainingMs)+","+String(rainEvent.id)+","+String(rainEvent.pending)+","+
     String(coreAirtime.used)+","+u64(coreDutyWaitMs())+","+String(remoteRssi,1)+","+String(remoteSnr,1)+","+
     u64(receiver.pulseMs)+","+String(receiver.config)+","+String(lastAck?linkOk():false)+","+String(coreMaintenance)+"\n";
   if(recordFile.size()+line.length()>RECORD_LIMIT) {
@@ -108,24 +102,24 @@ void loadSettings() {
   Preferences p;p.begin("rainsensor",true);rainOnThreshold=p.getUShort("on",3500);rainOffThreshold=p.getUShort("off",3900);p.end();
   if(rainOnThreshold>3900 || rainOffThreshold>4095 || rainOffThreshold<=rainOnThreshold){rainOnThreshold=3500;rainOffThreshold=3900;}
   p.begin("rainmode",true);testSampleMs=p.getUInt("sample",50);sleepSeconds=p.getUInt("sleep",120);
-  heartbeatSeconds=p.getUInt("heartbeat",90);confirmMs=p.getUInt("confirm",0);doWakeEnabled=p.getBool("dowake",false);p.end();
+  heartbeatSeconds=p.getUInt("heartbeat",30);confirmMs=p.getUInt("confirm",0);doWakeEnabled=p.getBool("dowake",false);p.end();
   testSampleMs=constrain(testSampleMs,10UL,60000UL);sleepSeconds=constrain(sleepSeconds,1UL,86400UL);
   heartbeatSeconds=constrain(heartbeatSeconds,1UL,86400UL);confirmMs=constrain(confirmMs,0UL,60000UL);
-  p.begin("rainevent",true);uint64_t state=p.getULong64("state",0);eventId=state>>1;eventPending=state&1;p.end();
+  p.begin("rainevent",true);uint64_t state=p.getULong64("state",0);rainEvent.id=state>>1;rainEvent.pending=state&1;p.end();
 }
 void queueState() {
   // Do not mutate an in-flight packet. The current state is queued after its ACK.
   if(pending || awaitingAck)return;
   pendingFrame=newFrame(FRAME_STATE,TX_ID,senderBoot,++txSequence,sessionId);
   pendingFrame.wet=wetNow();pendingFrame.ao=analogRain;pendingFrame.batteryMv=batteryMv;
-  pendingFrame.event=eventPending?eventId:0;
+  pendingFrame.event=rainEvent.pending?rainEvent.id:0;
   pendingFrame.ackSeq=corePrototype?heartbeatSeconds:sleepSeconds;
   if(simulation>=0)pendingFrame.flags|=STATE_SIMULATED;
   pending=true;attempts=0;nextSend=uptimeMs();
 }
 void latchRainEvent() {
   // A single outstanding latch is sufficient for an activation; later episodes coalesce until delivery.
-  if(!eventPending){uint32_t previous=eventId;do{eventId=esp_random();}while(!eventId||eventId==previous);eventPending=true;saveEvent();}
+  if(!rainEvent.pending){uint32_t next;do{next=esp_random();}while(!next||next==rainEvent.id);rainEvent.raise(next);saveEvent();}
   recordEvent("rain_event");
 }
 void updateSensor(bool immediate=false) {
@@ -158,7 +152,7 @@ String roleControlsHtml() {
     "<label>Seco si AO ≥<input name='off' type='number' min='1' max='4095' value='3900' required></label>"
     "<label>Lectura despierto (ms)<input name='sample' type='number' min='10' max='60000' value='50' required></label>"
     "<label>Confirmación producción (ms)<input name='confirm_ms' type='number' min='0' max='60000' value='0' required></label>"
-    "<label>Telemetría prototipo (s)<input name='heartbeat' type='number' min='1' max='86400' value='90' required></label>"
+    "<label>Telemetría prototipo (s)<input name='heartbeat' type='number' min='1' max='86400' value='30' required></label>"
     "<label>Sueño producción (s)<input name='sleep' type='number' min='1' max='86400' value='120' required></label>"
     "<label>Despertar DO=LOW<select name='dowake'><option value='0'>Desactivado</option><option value='1'>Activado tras validar</option></select></label></div>"
     "<p class='hint'>AO es lectura ADC, no intensidad de precipitación. Prototipo reacciona en la siguiente lectura. "
@@ -192,7 +186,7 @@ void configureRoleRoutes() {
     requestedConfig=armed|(policy<<1)|(loss<<3)|(polarity<<6);requestedPulseMs=duration;requestedLossSeconds=seconds;configPending=true;commandResult="Pendiente";
     recordEvent("receiver_config_queued");web.send(202,"text/plain","Configuracion en cola. Comprueba config_pending hasta confirmacion.");
   });
-  web.on("/reset-stop",HTTP_POST,[](){if(!corePostAllowed())return;if(configPending||resetPending){web.send(409,"text/plain","Orden pendiente");return;}
+  web.on("/reset-activation",HTTP_POST,[](){if(!corePostAllowed())return;if(configPending||resetPending){web.send(409,"text/plain","Orden pendiente");return;}
     resetPending=true;commandResult="Pendiente";recordEvent("reset_queued");web.send(202,"text/plain","Rearme en cola; requiere seco y enlace vigente en receptor");});
   web.on("/record/prepare",HTTP_POST,[](){
     if(!corePostAllowed())return;
@@ -208,7 +202,7 @@ void configureRoleRoutes() {
     String iso=web.arg("start_iso");if(!validIso(iso)){web.send(400,"text/plain","Fecha de inicio invalida; recarga la interfaz");return;}
     recordFile=LittleFS.open("/experiment.csv","w");if(!recordFile){web.send(500,"text/plain","No se pudo crear el archivo");return;}
     recordFile.println("start_utc,elapsed_ms,event,ao,do,wet,simulated,battery_mv,ack_age_ms,rssi_dbm,snr_db,tx_packets,acked_states,retries,ack_timeouts,rtt_ms,rx_known,rx_flags,remaining_ms,event_id,event_pending,airtime_used_ms,duty_wait_ms,rx_rssi_dbm,rx_snr_db,pulse_ms,rx_config,link_ok,maintenance");
-    recordStartIso=iso;saveRecordMetadata();recordStarted=uptimeMs();recordRows=0;recordElapsed=0;recordError="";recording=true;recordEvent("record_start");web.send(200,"text/plain","Grabando");
+    recordStartIso=iso;recordStarted=uptimeMs();recordRows=0;recordElapsed=0;recordError="";recording=true;recordEvent("record_start");web.send(200,"text/plain","Grabando");
   });
   web.on("/record/stop",HTTP_POST,[](){if(!corePostAllowed())return;if(recording){recordEvent("record_stop");recordFile.close();recording=false;}web.send(200,"text/plain","Grabacion detenida");});
   web.on("/record.csv",HTTP_GET,[](){
@@ -226,9 +220,9 @@ String getStatusJson() {
     ",\"ack_age_ms\":"+(lastAck?u64(uptimeMs()-lastAck):String("null"))+",\"rssi_dbm\":"+String(lastRssi,1)+",\"snr_db\":"+String(lastSnr,1)+
     ",\"rx_rssi_dbm\":"+String(remoteRssi,1)+",\"rx_snr_db\":"+String(remoteSnr,1)+",\"rtt_ms\":\""+u64(lastRtt)+"\""+
     ",\"acked_states\":"+String(ackedStates)+",\"sent_states\":"+String(sentStates)+",\"retries\":"+String(retries)+",\"ack_timeouts\":"+String(ackTimeouts)+
-    ",\"auth_rejects\":"+String(authRejects)+",\"event_pending\":"+String(eventPending?"true":"false")+
+    ",\"auth_rejects\":"+String(authRejects)+",\"event_pending\":"+String(rainEvent.pending?"true":"false")+
     ",\"config_pending\":"+String(configPending||resetPending?"true":"false")+",\"rx_known\":"+String(rxKnown?"true":"false")+
-    ",\"rx_active\":"+String(receiver.flags&ACK_STOP?"true":"false")+
+    ",\"rx_active\":"+String(receiver.flags&ACK_ACTIVE?"true":"false")+
     ",\"rx_armed\":"+String(receiver.flags&ACK_RELAY_ARMED?"true":"false")+",\"rx_coil\":"+String(receiver.flags&ACK_COIL_ON?"true":"false")+
     ",\"rx_maintenance\":"+String(receiver.flags&ACK_MAINTENANCE?"true":"false")+",\"rx_restored\":"+String(receiver.config&32?"true":"false")+
     ",\"remaining_ms\":\""+u64(receiver.remainingMs)+"\",\"pulse_ms\":\""+u64(receiver.pulseMs)+"\""+
@@ -250,15 +244,15 @@ void processReceived() {
     if(sessionId!=f.session){sessionId=f.session;pending=false;awaitingAck=false;queueState();recordEvent("session_ready");}
   }else if(f.type==FRAME_ACK&&sessionId&&f.session==sessionId&&f.ackSeq==pendingFrame.seq&&awaitingAck){
     lastRssi=radio.getRSSI();lastSnr=radio.getSNR();remoteRssi=f.peerRssi10/10.0f;remoteSnr=f.peerSnr10/10.0f;
-    lastAck=uptimeMs();lastRtt=lastAck-ackStart;receiver=f;rxKnown=true;
+    lastAck=uptimeMs();lastRtt=lastAck-txStarted;receiver=f;rxKnown=true;
     if(pendingFrame.type==FRAME_STATE){++ackedStates;
-      if(eventPending&&f.event==eventId){eventPending=false;if(!saveEvent())eventPending=true;}
+      if(rainEvent.acknowledge(f.event)){if(!saveEvent())rainEvent.pending=true;}
     }else if(f.flags&(ACK_CONFIG|ACK_REJECTED)){
       configPending=false;resetPending=false;commandResult=f.flags&ACK_CONFIG?"Confirmada":"Rechazada por el receptor";
       recordEvent(f.flags&ACK_CONFIG?"receiver_config_confirmed":"receiver_command_rejected");
     }
     pending=false;awaitingAck=false;helloBackoff=15000;recordEvent("ack");
-    if(pendingFrame.type==FRAME_STATE&&(pendingFrame.wet!=wetNow()||pendingFrame.event!=(eventPending?eventId:0)||bool(pendingFrame.flags&STATE_SIMULATED)!=(simulation>=0)))queueState();
+    if(pendingFrame.type==FRAME_STATE&&(pendingFrame.wet!=wetNow()||pendingFrame.event!=(rainEvent.pending?rainEvent.id:0)||bool(pendingFrame.flags&STATE_SIMULATED)!=(simulation>=0)))queueState();
   }
   radio.startReceive();
 }
@@ -280,7 +274,7 @@ void serviceRadio() {
   if(!pending&&now-lastTx>=(uint64_t)heartbeatSeconds*1000)queueState();
   if(!pending)return;
   if(attempts>=3){sessionId=0;helloNonce=random64();if(!helloNonce)helloNonce=1;pending=false;awaitingAck=false;nextSend=now+helloBackoff;recordEvent("session_retry");return;}
-  pendingFrame.session=sessionId;int16_t rc=transmitFrame(pendingFrame,onRadioReceive);
+  pendingFrame.session=sessionId;txStarted=uptimeMs();int16_t rc=transmitFrame(pendingFrame,onRadioReceive);
   if(rc==-32000){nextSend=now+coreDutyWaitMs();return;}
   if(attempts++)++retries;if(pendingFrame.type==FRAME_STATE)++sentStates;
   lastTx=uptimeMs();recordEvent(rc==RADIOLIB_ERR_NONE?"tx":"tx_error");
@@ -297,9 +291,8 @@ void setup() {
   // Never format an existing filesystem automatically. The portal requires explicit confirmation.
   fsReady=LittleFS.begin(false);if(!fsReady)recordError="Memoria no preparada";
   if(fsReady&&LittleFS.exists("/experiment.csv")){
-    File meta=LittleFS.open("/experiment.meta","r");if(meta){recordStartIso=meta.readStringUntil('\n');recordStartIso.trim();if(!validIso(recordStartIso))recordStartIso="";meta.close();}
     File f=LittleFS.open("/experiment.csv","r");bool header=true;while(f.available()){String row=f.readStringUntil('\n');if(header){header=false;continue;}int comma=row.indexOf(','),end=row.indexOf(',',comma+1);uint64_t elapsed;
-      if(comma>0&&end>comma&&rain::decimal(row.substring(comma+1,end).c_str(),elapsed)){recordElapsed=elapsed;++recordRows;}}f.close();
+      if(comma>0&&end>comma&&validIso(row.substring(0,comma))&&rain::decimal(row.substring(comma+1,end).c_str(),elapsed)){recordStartIso=row.substring(0,comma);recordElapsed=elapsed;++recordRows;}}f.close();
   }
   updateSensor(true);readBattery();
   if(!resumed)coreStartPortal(false);if(sessionId)queueState();nextSend=uptimeMs();

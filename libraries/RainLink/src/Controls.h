@@ -16,7 +16,7 @@ inline String pulseControls() {
     "<p class='hint'>Duración total de 64 bits, sin tope de horas impuesto por la aplicación. Cero no produce pulso. "
     "Resolución configurada: 1 ms; el relé físico tiene su propia latencia. Prolongar usa la última lectura confirmada hasta perder enlace.</p>"
     "<label>Para armar escribe ARMAR<input name='confirm' autocomplete='off'></label>"
-    "<div class='actions'><button>Enviar configuración</button>"
+    "<div class='actions'><button>Enviar configuración</button><span id='receiverCommand' role='status'></span>"
     "<small>El envío por LoRa queda pendiente hasta recibir confirmación. La polaridad define la acción eléctrica de activar el relé.</small></div></form>"
-    "<button data-command='/reset-stop'>Rearmar activación restaurada</button></details>");
+    "<button data-command='/reset-activation'>Rearmar activación restaurada</button></details>");
 }

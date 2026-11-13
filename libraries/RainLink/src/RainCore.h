@@ -12,12 +12,13 @@
 #include <esp_ota_ops.h>
 #include <esp_system.h>
 #include <stddef.h>
+#include <atomic>
 #include <esp_timer.h>
 #include <sys/time.h>
 #include "RainLogic.h"
 #include "Portal.h"
 
-// Version shared by the two devices; Arduino-ESP32 core 3.3.12, RadioLib 7.8.1.
+// Version shared by the two devices; Arduino-ESP32 core 3.3.2, RadioLib 7.8.1.
 static const char *FW_VERSION = "1.1.0-prototype";
 static const uint32_t PROTOCOL_MAGIC = 0x52414E39UL;
 static const uint8_t PROTOCOL_VERSION = 2;
@@ -30,18 +31,16 @@ static const uint8_t FRAME_ACK = 4;
 static const uint8_t FRAME_MAINT = 5;
 static const uint8_t FRAME_CONFIG = 6;
 static const uint8_t ACK_COIL_ON = 0x04;
-static const uint8_t ACK_STOP = 0x08;
+static const uint8_t ACK_ACTIVE = 0x08;
 static const uint8_t ACK_MAINTENANCE = 0x10;
 static const uint8_t ACK_CONFIG = 0x20;
 static const uint8_t ACK_REJECTED = 0x40;
 static const uint8_t STATE_SIMULATED = 0x10;
-static const uint8_t ACK_APPLIED_GPIO = 0x01;
 static const uint8_t ACK_RELAY_ARMED = 0x02;
-static const uint8_t FRAME_FLAG_SLEEP = 0x04;
-static const uint8_t FRAME_FLAG_DO_WAKE = 0x08;
 
 // Clave HMAC: archivo privado local, no versionado.
 // PAIR_KEY is supplied by the sketch before including this header.
+static_assert(sizeof(PAIR_KEY)==32,"PAIR_KEY must contain 32 bytes");
 
 // Verified Heltec WiFi LoRa 32 V3 pins.
 static constexpr uint8_t RADIO_NSS = 8;
@@ -58,7 +57,7 @@ static constexpr uint8_t VEXT_CTRL = 36;
 
 static constexpr float LORA_FREQUENCY_MHZ = 868.3f;
 static constexpr float LORA_BW_KHZ = 125.0f;
-static constexpr uint8_t LORA_SF = 9;
+static constexpr uint8_t LORA_SF = 7;
 static constexpr uint8_t LORA_CR = 5;
 static constexpr int8_t LORA_POWER_DBM = 10;
 static constexpr uint8_t LORA_PREAMBLE = 8;
@@ -100,7 +99,7 @@ String coreApPassword;
 String coreCsrfToken;
 bool corePrototype = true;
 bool coreDisplayEnabled = true;
-bool coreMaintenance = false;
+std::atomic<bool> coreMaintenance{false};
 bool coreApActive = false;
 uint32_t coreCloseAtMs = 0;
 uint32_t coreTxCount = 0, coreTxErrors = 0, coreDutyDeferrals = 0;

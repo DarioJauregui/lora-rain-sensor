@@ -14,7 +14,8 @@ struct ControlGuard {
 };
 rain::Pulse pulse;
 bool controlArmed=false, activeCoil=true, coilOn=false, haveState=false, lastRain=false, simulated=false;
-bool sessionReady=false, commsLost=true, persistDirty=false;
+bool sessionReady=false, commsLost=true;
+std::atomic<bool> persistDirty{false};
 uint8_t lossPolicy=rain::HOLD_OUTPUT;
 uint64_t lossTimeoutMs=180000, lastFresh=0, receiverSession=0, senderNonce=0;
 uint32_t ownBoot=0, senderBoot=0, ownSeq=0, highestSeq=0, lastEvent=0;
@@ -28,12 +29,8 @@ void recordEvent(const char *event){Serial.printf("%llu %s\n",(unsigned long lon
 void setPhysicalCoil(bool on){coilOn=on;digitalWrite(PIN_RELAY_NPN,on?HIGH:LOW);}
 // Caller holds controlMutex. All paths, including web and OTA, share this gate.
 void applyControl(){
-  if(coreMaintenance||!controlArmed||!haveState){setPhysicalCoil(false);return;}
-  if(commsLost){
-    if(lossPolicy==rain::HOLD_OUTPUT)return;
-    bool active=lossPolicy==rain::FORCE_STOP;setPhysicalCoil(active?activeCoil:!activeCoil);return;
-  }
-  setPhysicalCoil(pulse.active?activeCoil:!activeCoil);
+  setPhysicalCoil(rain::outputCoil(coreMaintenance,controlArmed,haveState,commsLost,
+                                 lossPolicy,pulse.active,activeCoil,coilOn));
 }
 void controlTask(void *){
   for(;;){
@@ -48,23 +45,29 @@ void controlTask(void *){
     vTaskDelay(1);
   }
 }
+struct __attribute__((packed)) ReceiverSettings {
+  uint32_t magic;
+  uint64_t duration, timeout;
+  uint32_t event;
+  uint8_t policy, loss, armed, active, polarity;
+};
+bool relayActive(){return controlArmed&&haveState&&!coreMaintenance&&(coilOn==activeCoil);}
 bool persistSettings(){
-  uint64_t duration;uint32_t event;uint8_t policy,loss;bool armed,active,polarity;uint64_t timeout;
-  {ControlGuard lock;duration=pulse.durationMs;event=lastEvent;policy=pulse.policy;loss=lossPolicy;
-    armed=controlArmed;active=pulse.active;polarity=activeCoil;timeout=lossTimeoutMs;persistDirty=false;}
+  ReceiverSettings saved{};
+  {ControlGuard lock;saved.magic=0x52585332;saved.duration=pulse.durationMs;saved.event=lastEvent;saved.policy=pulse.policy;
+    saved.loss=lossPolicy;saved.armed=controlArmed;saved.active=pulse.active;saved.polarity=activeCoil;saved.timeout=lossTimeoutMs;persistDirty=false;}
   Preferences p;if(!p.begin("rainrx2",false))return false;
-  bool ok=p.putULong64("duration",duration)==8 && p.putUInt("event",event)==4 && p.putUChar("policy",policy)==1 &&
-    p.putUChar("loss",loss)==1 && p.putBool("armed",armed)==1 && p.putBool("active",active)==1 &&
-    p.putBool("polarity",polarity)==1 && p.putULong64("timeout",timeout)==8;
-  p.end();return ok;
+  bool ok=p.putBytes("settings",&saved,sizeof(saved))==sizeof(saved);p.end();return ok;
 }
 void beforeOta(){ControlGuard lock;setPhysicalCoil(false);recordEvent("maintenance_latched");}
 void loadSettings(){
-  Preferences p;p.begin("rainrx2",true);pulse.durationMs=p.getULong64("duration",1000);pulse.policy=p.getUChar("policy",0);
-  lossPolicy=p.getUChar("loss",0);controlArmed=p.getBool("armed",false);activeCoil=p.getBool("polarity",true);
-  pulse.active=p.getBool("active",false);pulse.restored=pulse.active;lossTimeoutMs=p.getULong64("timeout",180000);lastEvent=p.getUInt("event",0);p.end();
-  if(pulse.policy>2)pulse.policy=0;if(lossPolicy>2)lossPolicy=0;
-  if(lossTimeoutMs<1000||lossTimeoutMs>UINT32_MAX)lossTimeoutMs=180000;
+  ReceiverSettings saved{};Preferences p;
+  if(!p.begin("rainrx2",true))return;
+  size_t n=p.getBytes("settings",&saved,sizeof(saved));p.end();
+  if(n!=sizeof(saved)||saved.magic!=0x52585332||saved.policy>2||saved.loss>2||saved.armed>1||saved.active>1||saved.polarity>1||
+     saved.timeout<1000||saved.timeout>UINT32_MAX)return;
+  pulse.durationMs=saved.duration;pulse.policy=saved.policy;pulse.active=saved.active;pulse.restored=pulse.active;
+  lossPolicy=saved.loss;controlArmed=saved.armed;activeCoil=saved.polarity;lossTimeoutMs=saved.timeout;lastEvent=saved.event;
 }
 bool configureReceiver(uint32_t config,uint64_t duration,uint64_t timeout,bool reset){
   {ControlGuard lock;
@@ -94,7 +97,7 @@ void configureRoleRoutes(){
     bool ok=configureReceiver(armed|(policy<<1)|(loss<<3)|(polarity<<6),duration,seconds*1000,false);
     web.send(ok?200:500,"text/plain",ok?"Configuracion guardada":"Fallo al guardar; salida en mantenimiento");
   });
-  web.on("/reset-stop",HTTP_POST,[](){if(!corePostAllowed())return;
+  web.on("/reset-activation",HTTP_POST,[](){if(!corePostAllowed())return;
     bool ok=configureReceiver(0,0,0,true);web.send(ok?200:409,"text/plain",ok?"Activacion rearmada":"Rearme bloqueado: requiere sensor seco, enlace vigente y memoria disponible");});
 }
 uint32_t configWord(){return (controlArmed?1:0)|(pulse.policy<<1)|(lossPolicy<<3)|(pulse.restored?32:0)|(activeCoil?64:0);}
@@ -104,7 +107,7 @@ String getStatusJson(){
     ",\"simulated\":"+String(simulated?"true":"false")+",\"ao\":"+String(lastAO)+",\"battery_mv\":"+String(lastBatteryMv)+
     ",\"link_ok\":"+String(haveState&&!commsLost?"true":"false")+",\"ack_age_ms\":"+(haveState?u64(uptimeMs()-lastFresh):String("null"))+
     ",\"rssi_dbm\":"+String(lastRssi,1)+",\"snr_db\":"+String(lastSnr,1)+",\"rx_known\":true,\"rx_armed\":"+String(controlArmed?"true":"false")+
-    ",\"rx_coil\":"+String(coilOn?"true":"false")+",\"rx_active\":"+String(pulse.active?"true":"false")+
+    ",\"rx_coil\":"+String(coilOn?"true":"false")+",\"rx_active\":"+String(relayActive()?"true":"false")+
     ",\"rx_restored\":"+String(pulse.restored?"true":"false")+",\"rx_maintenance\":"+String(coreMaintenance?"true":"false")+
     ",\"remaining_ms\":\""+u64(pulse.remaining(uptimeMs()))+"\",\"pulse_ms\":\""+u64(pulse.durationMs)+"\""+
     ",\"policy\":"+String(pulse.policy)+",\"loss\":"+String(lossPolicy)+",\"polarity\":"+String(activeCoil?1:0)+",\"loss_seconds\":"+u64(lossTimeoutMs/1000)+
@@ -118,7 +121,7 @@ void sendChallenge(){
 void sendAck(uint32_t seq,bool config=false,bool rejected=false){
   auto f=newFrame(FRAME_ACK,RX_ID,ownBoot,++ownSeq,receiverSession);f.ackSeq=seq;
   {ControlGuard lock;f.event=lastEvent;f.config=configWord();f.pulseMs=pulse.durationMs;f.remainingMs=pulse.remaining(uptimeMs());f.echo=lossTimeoutMs;
-    if(controlArmed)f.flags|=ACK_RELAY_ARMED;if(coilOn)f.flags|=ACK_COIL_ON;if(pulse.active)f.flags|=ACK_STOP;
+    if(controlArmed)f.flags|=ACK_RELAY_ARMED;if(coilOn)f.flags|=ACK_COIL_ON;if(relayActive())f.flags|=ACK_ACTIVE;
     if(coreMaintenance)f.flags|=ACK_MAINTENANCE;if(config)f.flags|=ACK_CONFIG;if(rejected)f.flags|=ACK_REJECTED;
     f.peerRssi10=roundf(lastRssi*10);f.peerSnr10=roundf(lastSnr*10);}
   delay(65);transmitFrame(f,onRadioReceive);
