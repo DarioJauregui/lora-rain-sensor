@@ -1,78 +1,57 @@
-# Sensor de lluvia - paro bombas (LoRa)
+# LoRa Rain Sensor
 
-Prototipo con **dos Heltec WiFi LoRa 32 V3 (ESP32-S3 + SX1262)**. El emisor detecta lluvia mediante MH-RD/LM393 y transmite por LoRa 868 MHz; el receptor gestiona un módulo de relé. Incluye OLED de diagnóstico y portal Wi-Fi local para configuración/OTA.
+Prototipo personal de sensor de lluvia con dos Heltec WiFi LoRa 32 V3: un emisor alimentado por batería detecta lluvia y un receptor controla un relé. La comunicación es LoRa punto a punto; cada nodo dispone de pantalla OLED y portal Wi-Fi local para configuración y actualización.
 
-**Estado:** `v1.0.0-rc` cargada en ambas placas y arranca, según la prueba realizada. **No validada para maniobra real de bombas.** Se han verificado por separado USB/programación y LoRa en mesa; quedan pendientes las pruebas integradas del sensor, relé, batería, OTA y cobertura en instalación.
+**Estado:** firmware `v1.0.0-rc` cargado y arrancado en ambas placas. Se han probado por separado la programación y el enlace LoRa a corta distancia. El conjunto **no está validado para controlar bombas**.
 
 ## Archivos
 
-- `Emisor/Emisor.ino`: firmware del nodo de batería.
-- `Receptor/Receptor.ino`: firmware del nodo alimentado a 5 V.
-- `pair_key.example.h`: ejemplo de clave local. Se copia como `pair_key.h` dentro de **cada** carpeta de sketch. Los archivos reales `pair_key.h` están excluidos de Git.
+- [Emisor/Emisor.ino](Emisor/Emisor.ino): sensor y transmisor.
+- [Receptor/Receptor.ino](Receptor/Receptor.ino): receptor y control del relé.
+- [pair_key.example.h](pair_key.example.h): plantilla de la clave compartida.
 
-Se mantienen dos sketches autónomos para abrirlos directamente en Arduino IDE. No se incluyen duplicados, ZIP, binarios ni fotografías de las pruebas.
+Los sketches son independientes y se abren directamente en Arduino IDE. Los archivos reales `pair_key.h` y los binarios están excluidos de Git.
 
-## Hardware y conexiones previstas
+## Hardware previsto
 
-| Nodo | Elemento | Conexión / observación |
-|---|---|---|
-| Emisor | Heltec V3 + antena 868 MHz | SX1262 integrado, latiguillo U.FL a SMA en carcasa impresa |
-| Emisor | MH-RD + controlador LM393 | VCC→3V3, GND→GND, AO→GPIO4; DO→GPIO2 **opcional** para despertar |
-| Emisor | LiPo 104060, 3,7 V / 3000 mAh | SH1.25-2, verificar polaridad/protección; tercer cable amarillo sin identificar |
-| Emisor | Interruptor 3 pines | RST↔GND mantiene la placa en reset, **no corta alimentación** |
-| Receptor | Heltec V3 + antena 868 MHz | Antena fuera del cuadro si es metálico |
-| Receptor | Mean Well HDR-15-5 | Fuente aislada 230 V AC→5 V DC; cableado de red por personal habilitado |
-| Receptor | Módulo relé 5 V, JQC-3FF-S-Z | Firmware usa GPIO5 mediante NPN y resistencias, asumiendo módulo de disparo LOW: **comprobar antes de conectar** |
-
-**Maniobra prevista:** bobina energizada en estado normal y desenergizada durante el paro; el contacto **COM+NO** se abre al detener. Debe actuar sobre un circuito de mando validado, no directamente sobre la alimentación de potencia de la bomba. **Pendiente comprobar qué interrumpen realmente los dos cables del cuadro**, enclavamientos y riesgo de rearranque.
-
-La caja personalizada en 3D está impresa: soportes de batería, controlador LM393, interruptor y salida SMA. Los archivos CAD/STL finales se incorporarán solo cuando estén identificados y verificados.
-
-## Firmware y uso
-
-- **Radio:** LoRa P2P 868,3 MHz, BW125, SF9, 10 dBm; HMAC-SHA256, desafío de sesión, secuencias, ACK y reintentos. No usa LoRaWAN ni Wi-Fi para transportar órdenes.
-- **Pantalla:** lluvia, estado de relé, RSSI/SNR y calidad estimada 0–100 % (índice orientativo, **no** cobertura calibrada).
-- **Emisor:** modo pruebas (AO cada 200 ms) y modo producción (deep sleep configurable 60–3600 s); DO para despertar antes, desactivado hasta calibrar polaridad. Umbrales configurables; evitar calibrar automáticamente como seco al arrancar.
-- **Receptor:** una orden de paro mantenida hasta rearme manual, o paro temporizado h:m:s. En pérdida de LoRa mantiene la última salida; en reinicio/corte de alimentación la bobina se desenergiza. Arranca desarmado hasta prueba de banco.
-- **Portal:** tras reinicio normal de cada equipo, AP `LLUVIA-TX-XXXX` / `LLUVIA-RX-XXXX` durante 180 s; `http://192.168.4.1`, usuario `admin` y contraseña individual generada y almacenada en NVS (visible en OLED/serie al inicio). Configuración y carga OTA del `.bin` correspondiente. El portal no permanece activo durante deep sleep.
-- **OTA:** se realiza directamente por Wi-Fi con cada placa, no mediante transferencia de firmware por LoRa. Requiere particionado con dos aplicaciones y comprobar recuperación tras actualización. Reiniciar el receptor puede abrir el contacto COM+NO.
-
-### Entorno Arduino IDE
-
-- Arduino IDE 2.3.10; placa **Heltec WiFi LoRa 32(V3)**.
-- `esp32 by Espressif Systems` 3.3.12.
-- Bibliotecas: **RadioLib by Jan Gromes 7.8.1** y **U8g2 by olikraus**.
-- Monitor serie 115200 baudios. Conectar antena LoRa antes de transmitir.
-
-### Configurar clave LoRa sin publicarla
-
-1. Copiar `pair_key.example.h` a `Emisor/pair_key.h` y `Receptor/pair_key.h`.
-2. Generar **32 bytes aleatorios**; por ejemplo, en Python: `python -c "import secrets; print(', '.join(f'0x{x:02X}' for x in secrets.token_bytes(32)))"`.
-3. Escribir exactamente **la misma clave** en ambas copias y eliminar la línea `#error`.
-4. Compilar y actualizar los **dos** nodos en una intervención de pruebas, con la salida del relé desarmada. No subir `pair_key.h` ni publicar claves, credenciales o binarios.
-
-**Nota de compatibilidad:** la versión compilada anteriormente llevaba otra clave escrita en el sketch. Al cambiarla, un nodo actualizado dejará de hablar con el otro hasta que ambos utilicen la misma. Conservar la clave anterior **solo localmente** si se requiere una transición temporal; renovarla antes de uso operativo.
-
-## Histórico breve
-
-| Etapa | Resultado |
+| Nodo | Componentes y conexiones |
 |---|---|
-| Primer prototipo ESP32 + MH-RD + relé | Detección AO y ajuste del potenciómetro LM393: lecturas variables y saturación; calibración pendiente |
-| Enlace ESP-NOW 2,4 GHz | Funcionó en pruebas, pero la propagación entre muros/plantas fue insuficiente |
-| Cambio a LoRa 868 MHz | Dos Heltec V3, antenas externas, LiPo emisor, fuente 5 V receptor y carcasa personalizada |
-| Pruebas de mesa | ESP32-S3 240 MHz / flash 8 MB; mensajes LoRa recibidos sin pérdidas observadas a corta distancia; ejemplo de RSSI ~−26 dBm y SNR ~13 dB |
-| `v0.9` → `v1.0.0-rc` | Integración de sensor, relé, dos modos de paro, pantallas, portal, OTA y autenticación; ambas placas programadas |
+| Emisor | Heltec V3 con antena de 868 MHz; sensor MH-RD/LM393 a 3,3 V, AO en GPIO4 y DO opcional en GPIO2. |
+| Emisor | LiPo 3,7 V / 3000 mAh: verificar conector, polaridad y protección; tercer cable sin identificar. El interruptor RST–GND mantiene la placa en reset, no corta la alimentación. |
+| Receptor | Heltec V3 con antena de 868 MHz y fuente aislada de 5 V. |
+| Receptor | Relé JQC-3FF-S-Z de 5 V, controlado desde GPIO5 mediante NPN y resistencias. Se presupone disparo activo en LOW: comprobarlo antes de conectar. |
 
-## Validación pendiente
+La maniobra prevista mantiene la bobina energizada en funcionamiento normal y la desenergiza para abrir COM+NO durante el paro. Debe actuar sobre un circuito de mando validado, no directamente sobre la potencia de la bomba. Antes de conectarlo, comprobar el circuito real, sus protecciones y el riesgo de rearranque. El cableado de red corresponde a personal habilitado.
 
-1. Calibrar AO/DO mojado y seco, histéresis y despertar real desde deep sleep; medir consumo de batería.
-2. Comprobar desde el móvil portal, configuración persistente y OTA/reinicio de ambos nodos.
-3. Ensayar con multímetro el relé: nivel de disparo, GPIO5/NPN, contactos COM+NO, arranque, pérdida de LoRa, reinicios y modo temporizado; comprobar el comportamiento ante fallos.
-4. Medir recepción entre plantas con antenas fuera de superficies metálicas: RSSI, SNR, ACK y pérdidas durante periodos representativos.
-5. Validar con el responsable eléctrico el esquema de mando del cuadro, protecciones y prevención de rearranque involuntario antes de conectarlo a bombas.
+La carcasa impresa y sus archivos de diseño están pendientes de revisión antes de incorporarlos.
 
-**No es un sistema de seguridad certificado.** La maniobra de bombas exige evaluación y validación eléctrica independientes del firmware.
+## Firmware
+
+- LoRa P2P: 868,3 MHz, BW125, SF9 y 10 dBm. Los mensajes se autentican con HMAC-SHA256, desafío de sesión, secuencias y confirmaciones; **no están cifrados**.
+- Emisor: lectura de lluvia, modo de prueba y deep sleep configurable. El despertar por DO está desactivado hasta calibrar su polaridad.
+- Receptor: paro hasta rearme manual o temporizado. Si se pierde el enlace conserva la última salida. Al reiniciarse desenergiza la bobina; la configuración de armado se conserva y la salida requiere un estado autenticado antes de activarse.
+- Portal local: tras el reinicio se abre durante 180 s como `LLUVIA-TX-XXXX` o `LLUVIA-RX-XXXX`, en [192.168.4.1](http://192.168.4.1). Usuario `admin`; contraseña individual en pantalla o serie. Permite configurar y actualizar cada placa por Wi-Fi; requiere particiones OTA compatibles. Reiniciar el receptor puede abrir COM+NO.
+- RSSI, SNR y calidad estimada son diagnósticos; el porcentaje no representa cobertura calibrada.
+
+### Compilación y clave
+
+Entorno utilizado: Arduino IDE 2.3.10, placa **Heltec WiFi LoRa 32(V3)**, `esp32 by Espressif Systems` 3.3.12, RadioLib 7.8.1 y U8g2. Monitor serie a 115200 baudios. Conectar la antena antes de transmitir.
+
+1. Copiar `pair_key.example.h` como `pair_key.h` en **cada** carpeta de sketch.
+2. Generar 32 bytes aleatorios, por ejemplo con Python: `python -c "import secrets; print(', '.join(f'0x{x:02X}' for x in secrets.token_bytes(32)))"`.
+3. Poner la misma clave en ambos archivos y eliminar la línea `#error`. No publicar claves, credenciales ni binarios.
+4. Compilar y actualizar ambos nodos con la salida desarmada. Si usan claves diferentes no se comunicarán. La versión anterior llevaba otra clave en el sketch; conservarla solo localmente si hace falta una transición y renovarla antes del uso operativo.
+
+## Pendiente de validar
+
+- Calibración en seco y mojado, histéresis, despertar desde deep sleep y consumo de batería.
+- Portal, persistencia de ajustes y recuperación tras OTA en ambos nodos.
+- Relé y circuito de mando: polaridad, contactos, arranque, pérdida de enlace, reinicios, temporización y comportamiento ante fallos.
+- Cobertura y fiabilidad del enlace durante periodos representativos.
+- Esquema eléctrico, protecciones y prevención del rearranque antes de cualquier conexión real.
+
+**No es un sistema de seguridad certificado.** La maniobra requiere evaluación y validación eléctrica independientes del firmware.
 
 ## Licencia
 
-La intención es permitir el uso, la modificación y la compartición del proyecto para fines no comerciales. Las licencias concretas para firmware, hardware y documentación están pendientes de definir. Hasta entonces, este repositorio no concede una licencia general de uso sobre su contenido.
+Se pretende permitir el uso, modificación y distribución para fines no comerciales. Las licencias para firmware, hardware y documentación están pendientes de definir; por ahora no se concede una licencia general de uso sobre el contenido.
