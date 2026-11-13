@@ -311,7 +311,7 @@ void loop() {
     if(coreApActive&&now<30000)coreDisplayPortalIfNeeded();else coreScreen("RAIN LINK / TX",wetNow()?"MOJADO":"SECO",simulation>=0?"SIMULACION":"SENSOR",
       linkOk()?"ACK OK":"SIN CONFIRMACION","RSSI "+String(lastRssi,0),recording?"GRABANDO":"");}
   if(!corePrototype&&!coreApActive&&!coreMaintenance&&!recording&&!awaitingAck&&
-     ((!pending&&sessionId)||(!sessionId&&now>20000))&&now>2500&&now>=confirmMs+500){
+     ((!pending&&sessionId)||(!sessionId&&now>20000)||(now>30000&&!configPending&&!resetPending))&&now>2500&&now>=confirmMs+500){
     savedSignature=RTC_SIGNATURE;savedBoot=senderBoot;savedSeq=txSequence;savedSession=sessionId;savedWet=detector.wet;
     radio.sleep();oled.setPowerSave(1);digitalWrite(VEXT_CTRL,HIGH);WiFi.mode(WIFI_OFF);
     esp_sleep_enable_timer_wakeup((uint64_t)sleepSeconds*1000000);
