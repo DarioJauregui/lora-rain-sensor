@@ -1,11 +1,11 @@
 name: Firmware checks
 on:
   push:
-    branches: [main]
+    branches: [main, codex/prototype-experiments]
   pull_request:
   workflow_dispatch:
 concurrency:
-  group: firmware-prototype
+  group: firmware-prototype-${{ github.event_name }}
   cancel-in-progress: true
 permissions:
   contents: write
@@ -41,7 +41,7 @@ jobs:
           arduino-cli compile --fqbn esp32:esp32:heltec_wifi_lora_32_V3 --libraries libraries --output-dir artifacts/RX Receptor
           arduino-cli compile --fqbn esp32:esp32:heltec_wifi_lora_32_V3 --libraries libraries --build-property compiler.cpp.extra_flags=-DRAIN_CONTACT_NC=1 --output-dir artifacts/RX-NC Receptor
       - name: Publish public development binaries
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
