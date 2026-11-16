@@ -1,5 +1,6 @@
 #pragma once
 #include "RainCore.h"
+#include "RainCrypto.h"
 // Management packets fit in one SX1262 packet: 216 bytes including HMAC.
 // 100 encrypted bytes accommodate the maximum SSID and WPA2 password together.
 struct __attribute__((packed)) Operational {
@@ -43,11 +44,6 @@ bool saveAccess(const char *ssid,const char *pass){
   if(ok)coreRebootAtMs=millis()+20000; // ACK precedes AP restart; duplicate requests reuse cached reply.
   memset(&a,0,sizeof(a));return ok;
 }
-bool mgKey(uint8_t *key){
-  const uint8_t salt[]="LoraRainSensor protocol 3";
-  const uint8_t info[]="management AES-256-GCM";
-  return corePaired&&mbedtls_hkdf(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256),salt,sizeof(salt)-1,PAIR_KEY,32,info,sizeof(info)-1,key,32)==0;
-}
 bool mgNonce(uint8_t *nonce){
   if(mgCounter==mgLimit){
     Preferences p;if(!p.begin("rainnonce",false))return false;
@@ -58,19 +54,15 @@ bool mgNonce(uint8_t *nonce){
   uint32_t id=localId();memcpy(nonce,&id,4);uint64_t n=mgCounter++;memcpy(nonce+4,&n,8);return true;
 }
 bool mgSeal(RainFrame &f,const ManagementData &data){
-  uint8_t key[32];if(!mgKey(key)||!mgNonce(f.payload))return false;
-  mbedtls_gcm_context ctx;mbedtls_gcm_init(&ctx);
-  int rc=mbedtls_gcm_setkey(&ctx,MBEDTLS_CIPHER_ID_AES,key,256);
-  if(!rc)rc=mbedtls_gcm_crypt_and_tag(&ctx,MBEDTLS_GCM_ENCRYPT,100,f.payload,12,
-    reinterpret_cast<const uint8_t*>(&f),offsetof(RainFrame,payload),reinterpret_cast<const uint8_t*>(&data),f.payload+12,16,f.payload+112);
-  mbedtls_gcm_free(&ctx);memset(key,0,32);return rc==0;
+  uint8_t key[32];if(!corePaired||!raincrypto::derive(PAIR_KEY,key)||!mgNonce(f.payload))return false;
+  bool ok=raincrypto::crypt(true,key,f.payload,reinterpret_cast<const uint8_t*>(&f),offsetof(RainFrame,payload),reinterpret_cast<const uint8_t*>(&data),f.payload+12,f.payload+112);
+  memset(key,0,32);return ok;
 }
 bool mgOpen(const RainFrame &f,ManagementData &data){
-  uint8_t key[32];if(!mgKey(key))return false;
-  mbedtls_gcm_context ctx;mbedtls_gcm_init(&ctx);
-  int rc=mbedtls_gcm_setkey(&ctx,MBEDTLS_CIPHER_ID_AES,key,256);
-  if(!rc)rc=mbedtls_gcm_auth_decrypt(&ctx,100,f.payload,12,reinterpret_cast<const uint8_t*>(&f),offsetof(RainFrame,payload),f.payload+112,16,f.payload+12,reinterpret_cast<uint8_t*>(&data));
-  mbedtls_gcm_free(&ctx);memset(key,0,32);return rc==0;
+  uint8_t key[32];if(!corePaired||!raincrypto::derive(PAIR_KEY,key))return false;
+  uint8_t tag[16];memcpy(tag,f.payload+112,16);
+  bool ok=raincrypto::crypt(false,key,f.payload,reinterpret_cast<const uint8_t*>(&f),offsetof(RainFrame,payload),f.payload+12,reinterpret_cast<uint8_t*>(&data),tag);
+  memset(key,0,32);return ok;
 }
 bool managementQueue(const ManagementData &data){
   if(mgWaiting)return false;
@@ -90,18 +82,20 @@ bool managementProcess(const RainFrame &f){
   if(f.type==8){
     if(!mgWaiting||f.event!=mgPending.event)return true;
     mgState=d.result?"Aplicada":"Rechazada";mgWaiting=false;mgLastReply=uptimeMs();
-    if(d.kind==0&&d.result){memcpy(&mgPeer,d.bytes,sizeof(mgPeer));mgPeerKnown=true;}
+    if(d.kind==0&&d.result){memcpy(&mgPeer,d.bytes,sizeof(mgPeer));mgPeerKnown=true;char ssid[33]{};memcpy(ssid,d.bytes+sizeof(mgPeer),32);mgPeerSsid=ssid;}
     if(d.kind==2&&d.result){char name[33]{};memcpy(name,d.bytes,32);mgPeerSsid=name;}
     memset(&mgPending,0,sizeof(mgPending));return true;
   }
   bool ok=false;
   if(!coreMaintenance){
-    if(d.kind==0){auto op=getOperational();memset(d.bytes,0,sizeof(d.bytes));memcpy(d.bytes,&op,sizeof(op));ok=true;}
+    if(d.kind==0){auto op=getOperational();memset(d.bytes,0,sizeof(d.bytes));memcpy(d.bytes,&op,sizeof(op));memcpy(d.bytes+sizeof(op),coreApSsid.c_str(),coreApSsid.length());ok=true;}
     if(d.kind==1){Operational op;memcpy(&op,d.bytes,sizeof(op));ok=applyOperational(op);}
     if(d.kind==2){char ssid[33]{},pass[64]{};memcpy(ssid,d.bytes,33);memcpy(pass,d.bytes+33,64);
       ok=saveAccess(ssid,pass);memset(pass,0,sizeof(pass));memset(d.bytes,0,sizeof(d.bytes));memcpy(d.bytes,ssid,32);}
     if(d.kind==3){managementRxAction();ok=true;memset(d.bytes,0,sizeof(d.bytes));}
   }
+  if(!ok)memset(d.bytes,0,sizeof(d.bytes));
+  if(ok&&d.kind)recordEvent("remote_change_applied");
   d.result=ok;mgCached=newFrame(8,localId(),managementOwnBoot,++mgSequence,session);mgCached.event=f.event;
   if(mgSeal(mgCached,d)){mgHighest=f.seq;mgHaveCache=true;delay(65);transmitFrame(mgCached,managementOnRx);}
   memset(&d,0,sizeof(d));return true;
@@ -117,10 +111,11 @@ void managementTick(){
     if(!mgSeal(mgPending,d)){mgWaiting=false;mgState="Error criptografico";}memset(&d,0,sizeof(d));if(!mgWaiting)return;}
   if(mgPending.session!=session){mgWaiting=false;mgState="Sin confirmacion: sesion cambiada";return;}
   int rc=transmitFrame(mgPending,managementOnRx);
-  if(rc==-32000)return;++mgAttempts;mgNext=now+5000;mgState="Pendiente de confirmacion";
+  if(rc==-32000){mgState="Pendiente: presupuesto de radio";mgNext=now+coreAirtime.wait(rtcTimeMs(),(radio.getTimeOnAir(216)+999)/1000+5);return;}++mgAttempts;mgNext=now+5000;mgState="Pendiente de confirmacion";
 }
+String jsonEscape(String v){v.replace("\\","\\\\");v.replace("\"","\\\"");return v;}
 String managementStatus(){
-  return ",\"paired\":"+String(corePaired?"true":"false")+",\"ssid\":\""+coreApSsid+"\",\"management_state\":\""+mgState+"\",\"remote_ssid\":\""+mgPeerSsid+"\",\"remote_known\":"+String(mgPeerKnown?"true":"false")+
+  return ",\"paired\":"+String(corePaired?"true":"false")+",\"ssid\":\""+jsonEscape(coreApSsid)+"\",\"management_state\":\""+mgState+"\",\"remote_ssid\":\""+jsonEscape(mgPeerSsid)+"\",\"remote_known\":"+String(mgPeerKnown?"true":"false")+
     ",\"remote_sample\":"+String(mgPeer.sampleMs)+",\"remote_confirm_ms\":"+String(mgPeer.confirmMs)+",\"remote_heartbeat_ms\":"+String(mgPeer.heartbeatMs)+",\"remote_sleep_ms\":"+String(mgPeer.sleepMs)+
     ",\"remote_on\":"+String(mgPeer.on)+",\"remote_off\":"+String(mgPeer.off)+",\"remote_prototype\":"+String(mgPeer.prototype?1:0)+",\"remote_dowake\":"+String(mgPeer.doWake?1:0)+
     ",\"free_heap\":"+String(ESP.getFreeHeap());

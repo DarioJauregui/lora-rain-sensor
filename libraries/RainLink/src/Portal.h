@@ -23,7 +23,7 @@ button:disabled{opacity:.5;cursor:wait}summary{cursor:pointer;font-weight:600}de
 .help{padding:0;border:0;margin-top:0;margin-bottom:0}.help p{position:absolute;z-index:3;top:20px;right:0;width:min(280px,75vw);padding:12px;background:#192b36;color:white;border-radius:7px;font-size:13px;box-shadow:0 4px 20px #0003}
 table{width:100%;border-collapse:collapse;font-size:13px}td{padding:7px;border-bottom:1px solid var(--line);overflow-wrap:anywhere}td:last-child{text-align:right}
 #notice{padding:10px 0;min-height:38px}#connection{font-size:13px}.error{color:#9f2929}input[type=file]{width:auto}
-@media(max-width:520px){main{padding:12px}section,details{padding:14px}.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.metric b{font-size:19px}header{align-items:start;flex-direction:column}}
+@media(max-width:520px){.time-grid label{font-size:11px;overflow-wrap:anywhere}.time-grid input{padding:7px;}main{padding:12px}section,details{padding:14px}.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.metric b{font-size:19px}header{align-items:start;flex-direction:column}}
 </style></head><body><main data-role="__ROLE__">
 <header><h1>LoraRainSensor · __ROLE__</h1><small>__VERSION__</small><label>Tema<select id="theme"><option value="auto">Automático</option><option value="light">Claro</option><option value="dark">Oscuro</option></select></label></header>
 <div id="notice" role="status" aria-live="polite"></div><div id="connection">Conectando al dispositivo…</div>

@@ -170,10 +170,8 @@ void configureRoleRoutes() {
     if(!readUnsigned("on",on)||!readUnsigned("off",off)||!readUnsigned("sample",sample)||!readUnsigned("confirm_ms",confirmation)||
        !readUnsigned("heartbeat",heartbeat)||!readUnsigned("sleep",sleep)||!readUnsigned("dowake",dowake)||
        on>3900||off>4095||off<=on||sample<10||sample>60000||confirmation>60000||heartbeat<1||heartbeat>86400||sleep<1||sleep>86400||dowake>1){web.send(400,"text/plain","Configuracion invalida");return;}
-    rainOnThreshold=on;rainOffThreshold=off;testSampleMs=sample;confirmMs=confirmation;heartbeatSeconds=heartbeat;sleepSeconds=sleep;doWakeEnabled=dowake;
-    Preferences p;p.begin("rainsensor",false);p.putUShort("on",on);p.putUShort("off",off);p.end();p.begin("rainmode",false);
-    p.putUInt("sample",sample);p.putUInt("confirm",confirmation);p.putUInt("heartbeat",heartbeat);p.putUInt("sleep",sleep);p.putBool("dowake",dowake);p.end();
-    if(!applyOperational(getOperational())){web.send(500,"text/plain","Error al guardar");return;}
+    Operational op=getOperational();op.on=on;op.off=off;op.sampleMs=sample;op.confirmMs=confirmation;op.heartbeatMs=heartbeat*1000;op.sleepMs=sleep*1000;op.doWake=dowake;
+    if(!applyOperational(op)){web.send(500,"text/plain","Error al guardar");return;}
     recordEvent("sensor_config");web.send(200,"text/plain","Configuracion guardada");
   });
   web.on("/simulate",HTTP_POST,[](){

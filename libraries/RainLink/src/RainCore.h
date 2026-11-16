@@ -209,7 +209,7 @@ bool initRadio(void (*onRx)(void)) {
   rc = radio.setDio2AsRfSwitch(true);
   if (rc != RADIOLIB_ERR_NONE) Serial.printf("RF SWITCH WARNING %d\n", rc);
   radio.setCRC(2);  // LoRa CRC-16, in addition to HMAC authentication.
-  coreFrameAirtimeMs = (radio.getTimeOnAir(sizeof(RainFrame)) + 999) / 1000 + 5;
+  coreFrameAirtimeMs = (radio.getTimeOnAir(88) + 999) / 1000 + 5;
   radio.setPacketReceivedAction(onRx);
   rc = radio.startReceive();
   Serial.printf("Radio RX: %d, SF%u, %.1f MHz\n", rc, LORA_SF, LORA_FREQUENCY_MHZ);
@@ -218,13 +218,16 @@ bool initRadio(void (*onRx)(void)) {
 
 int16_t transmitFrame(RainFrame &f, void (*onRx)(void)) {
   if (!corePaired) return -32001;
-  if (!coreAirtime.spend(rtcTimeMs(), coreFrameAirtimeMs)) {
+  size_t wireSize=(f.type==7||f.type==8)?sizeof(f):88;
+  uint32_t cost=(radio.getTimeOnAir(wireSize)+999)/1000+5;
+  if (!coreAirtime.spend(rtcTimeMs(), cost)) {
     ++coreDutyDeferrals; return -32000;
   }
   ++coreTxCount;
   signFrame(f);
   radio.clearPacketReceivedAction();
-  int16_t rc = radio.transmit(reinterpret_cast<uint8_t *>(&f), sizeof(f));
+  uint8_t wire[216];memcpy(wire,&f,72);if(wireSize==216)memcpy(wire+72,f.payload,128);memcpy(wire+wireSize-16,f.tag,16);
+  int16_t rc = radio.transmit(wire,wireSize);
   radio.setPacketReceivedAction(onRx);
   int16_t armRc = radio.startReceive();
   if (armRc != RADIOLIB_ERR_NONE) Serial.printf("RX REARM ERROR %d\n", armRc);
@@ -233,15 +236,13 @@ int16_t transmitFrame(RainFrame &f, void (*onRx)(void)) {
 }
 
 bool readFrame(RainFrame &f) {
-  size_t length = radio.getPacketLength();
-  if (length != sizeof(RainFrame)) {
-    uint8_t discard[255];
-    if (length && length <= sizeof(discard)) radio.readData(discard, length);
-    else radio.standby();
-    return false;
-  }
-  if (radio.readData(reinterpret_cast<uint8_t *>(&f), sizeof(f)) != RADIOLIB_ERR_NONE) return false;
-  return validFrame(f);
+  size_t length=radio.getPacketLength();uint8_t wire[255];
+  if(length!=88&&length!=216){if(length<=255)radio.readData(wire,length);else radio.standby();return false;}
+  if(radio.readData(wire,length)!=RADIOLIB_ERR_NONE)return false;
+  memset(&f,0,sizeof(f));memcpy(&f,wire,72);
+  if((f.type==7||f.type==8)!=(length==216))return false;
+  if(length==216)memcpy(f.payload,wire+72,128);
+  memcpy(f.tag,wire+length-16,16);return validFrame(f);
 }
 
 void coreWakeDisplay(uint32_t durationMs) {

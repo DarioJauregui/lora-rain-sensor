@@ -11,11 +11,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install cryptographic test dependency
+        run: sudo apt-get update -qq && sudo apt-get install -y libmbedtls-dev
       - name: Test portable firmware logic
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror -fsanitize=undefined,address -I libraries/RainLink/src tests/logic_test.cpp -o /tmp/rain-logic-test
           /tmp/rain-logic-test
           node tests/portal_test.mjs
+          c++ -std=c++17 -Wall -Wextra -Werror -I libraries/RainLink/src tests/crypto_test.cpp -lmbedcrypto -o /tmp/rain-crypto-test
+          /tmp/rain-crypto-test
       - uses: arduino/setup-arduino-cli@v2
       - uses: actions/cache@v4
         with:
