@@ -9,9 +9,12 @@ const element=id=>{
   return elements.get(id);
 };
 let role='TX', posted=[];
+const controls={policy:{},loss:{},armed:{},polarity:{},hours:{},minutes:{},seconds:{},milliseconds:{}};
+controls.namedItem=key=>controls[key];
+const pulseForm={elements:controls,dataset:{}};
 const ctx=vm.createContext({console,URLSearchParams,Date,BigInt,setInterval(){},confirm:()=>true,
   document:{getElementById:id=>id==='theme'?null:element(id),querySelector:s=>s==='main'?{dataset:{role}}:{elements:{mode:{},display:{}}},
-    querySelectorAll:()=>[],createElement:()=>({append(){}})},
+    querySelectorAll:s=>s==='form[data-pulse]'?[pulseForm]:[],createElement:()=>({append(){}})},
   fetch:async(path,opts)=>{if(opts)posted.push([path,opts.body]);return {ok:true,json:async()=>fixture,text:async()=>'OK'};}
 });
 const fixture={prototype:true,display_enabled:true,link_ok:true,ack_age_ms:100,wet:true,simulated:true,
@@ -20,6 +23,7 @@ const fixture={prototype:true,display_enabled:true,link_ok:true,ack_age_ms:100,w
   recording:false,record_rows:10,record_elapsed_ms:'1234'};
 vm.runInContext(js,ctx);
 await new Promise(resolve=>setImmediate(resolve));
+assert.equal(controls.hours.value,'5124095576030');
 assert.equal(vm.runInContext("durationText('3600001')",ctx),'1 h 0 min 0 s 1 ms');
 assert.equal(element('source').textContent,'Simulación activa');
 assert.equal(element('link').textContent,'Confirmado');

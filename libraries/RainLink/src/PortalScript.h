@@ -102,7 +102,7 @@ function paint(d){
 
   for(const form of document.querySelectorAll('form[data-pulse]')){
 
-    if(d.rx_known&&!form.dataset.loaded){fillDuration(form,d.pulse_ms);form.elements.policy.value=d.policy;form.elements.loss.value=d.loss;form.elements.armed.value=d.rx_armed?'1':'0';form.elements.polarity.value=d.polarity;form.elements.loss_seconds.value=d.loss_seconds;form.dataset.loaded='1';}
+    if(d.rx_known&&!form.dataset.loaded){fillDuration(form,d.pulse_ms);form.elements.policy.value=d.policy;form.elements.loss.value=d.loss;form.elements.armed.value=d.rx_armed?'1':'0';form.elements.polarity.value=d.polarity;if(form.elements.loss_seconds)form.elements.loss_seconds.value=d.loss_seconds;form.dataset.loaded='1';}
 
   }
 
