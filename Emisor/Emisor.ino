@@ -17,7 +17,7 @@ volatile bool rxInterrupt=false;
 rain::Detector detector;
 uint16_t analogRain=4095, rainOnThreshold=3500, rainOffThreshold=3900, batteryMv=0;
 int doLevel=-1, simulation=-1, batteryGate=0;
-uint32_t testSampleMs=50, confirmMs=0, heartbeatSeconds=30, sleepSeconds=120;
+uint32_t testSampleMs=50, confirmMs=0, heartbeatMs=30000, sleepMs=120000;
 bool doWakeEnabled=false, resumed=false;
 rain::PendingRain rainEvent;
 uint64_t lastSample=0, lastTx=0, lastAck=0, nextSend=0, ackStart=0, lastScreen=0;
@@ -40,7 +40,7 @@ constexpr size_t RECORD_LIMIT=1024*1024;
 
 void IRAM_ATTR onRadioReceive() { rxInterrupt=true; }
 bool wetNow() { return simulation<0?detector.wet:simulation==1; }
-bool linkOk() { return lastAck && uptimeMs()-lastAck < (uint64_t)heartbeatSeconds*3000+10000; }
+bool linkOk() { return lastAck && uptimeMs()-lastAck < (uint64_t)heartbeatMs*3+10000; }
 bool saveEvent() {
   Preferences p;
   bool ok=p.begin("rainevent",false);
@@ -101,12 +101,12 @@ void readBattery() {
 void loadSettings() {
   Preferences p;p.begin("rainsensor",true);rainOnThreshold=p.getUShort("on",3500);rainOffThreshold=p.getUShort("off",3900);p.end();
   if(rainOnThreshold>3900 || rainOffThreshold>4095 || rainOffThreshold<=rainOnThreshold){rainOnThreshold=3500;rainOffThreshold=3900;}
-  p.begin("rainmode",true);testSampleMs=p.getUInt("sample",50);sleepSeconds=p.getUInt("sleep",120);
-  heartbeatSeconds=p.getUInt("heartbeat",30);confirmMs=p.getUInt("confirm",0);doWakeEnabled=p.getBool("dowake",false);p.end();
-  testSampleMs=constrain(testSampleMs,10UL,60000UL);sleepSeconds=constrain(sleepSeconds,1UL,86400UL);
-  heartbeatSeconds=constrain(heartbeatSeconds,1UL,86400UL);confirmMs=constrain(confirmMs,0UL,60000UL);
+  p.begin("rainmode",true);testSampleMs=p.getUInt("sample",50);sleepMs=p.getUInt("sleep",120)*1000;
+  heartbeatMs=p.getUInt("heartbeat",30)*1000;confirmMs=p.getUInt("confirm",0);doWakeEnabled=p.getBool("dowake",false);p.end();
+  testSampleMs=constrain(testSampleMs,10UL,60000UL);sleepMs=constrain(sleepMs,1000UL,86400000UL);
+  heartbeatMs=constrain(heartbeatMs,1000UL,86400000UL);confirmMs=constrain(confirmMs,0UL,60000UL);
   p.begin("rainop",true);Operational saved{};bool has=p.getBytes("settings",&saved,sizeof(saved))==sizeof(saved);p.end();
-  if(has){testSampleMs=saved.sampleMs;confirmMs=saved.confirmMs;heartbeatSeconds=(saved.heartbeatMs+999)/1000;sleepSeconds=(saved.sleepMs+999)/1000;rainOnThreshold=saved.on;rainOffThreshold=saved.off;doWakeEnabled=saved.doWake;}
+  if(has){testSampleMs=saved.sampleMs;confirmMs=saved.confirmMs;heartbeatMs=saved.heartbeatMs;sleepMs=saved.sleepMs;rainOnThreshold=saved.on;rainOffThreshold=saved.off;doWakeEnabled=saved.doWake;}
   p.begin("rainevent",true);uint64_t state=p.getULong64("state",0);rainEvent.id=state>>1;rainEvent.pending=state&1;p.end();
 }
 void queueState() {
@@ -115,7 +115,7 @@ void queueState() {
   pendingFrame=newFrame(FRAME_STATE,TX_ID,senderBoot,++txSequence,sessionId);
   pendingFrame.wet=wetNow();pendingFrame.ao=analogRain;pendingFrame.batteryMv=batteryMv;
   pendingFrame.event=rainEvent.pending?rainEvent.id:0;
-  pendingFrame.ackSeq=corePrototype?heartbeatSeconds:sleepSeconds;
+  pendingFrame.ackSeq=((corePrototype?heartbeatMs:sleepMs)+999)/1000;
   if(!corePrototype)pendingFrame.flags|=4;
   if(simulation>=0)pendingFrame.flags|=STATE_SIMULATED;
   pending=true;attempts=0;nextSend=uptimeMs();
@@ -155,8 +155,8 @@ String roleControlsHtml() {
     "<label>Seco si AO ≥<input name='off' type='number' min='1' max='4095' value='3900' required></label>"
     "<label>Lectura despierto (ms)<input name='sample' type='number' min='10' max='60000' value='50' required></label>"
     "<label>Confirmación producción (ms)<input name='confirm_ms' type='number' min='0' max='60000' value='0' required></label>"
-    "<label>Telemetría prototipo (s)<input name='heartbeat' type='number' min='1' max='86400' value='30' required></label>"
-    "<label>Sueño producción (s)<input name='sleep' type='number' min='1' max='86400' value='120' required></label>"
+    "<label>Telemetría prototipo (ms)<input name='heartbeat' type='number' min='1' max='86400000' value='30000' required></label>"
+    "<label>Sueño producción (ms)<input name='sleep' type='number' min='1' max='86400000' value='120000' required></label>"
     "<label>Despertar DO=LOW<select name='dowake'><option value='0'>Desactivado</option><option value='1'>Activado tras validar</option></select></label></div>"
     "<p id='sensorLive' role='status'></p><details class='help'><summary>i</summary><p>AO es un ADC de 0 a 4095; DO es el comparador digital. La histéresis usa umbrales distintos para evitar cambios continuos. Ajusta observando seco y mojado. Confirmar exige mantener la condición durante el tiempo configurado; el sueño retrasa la detección.</p></details>"
     "<p class='hint'>AO es lectura ADC, no intensidad de precipitación. Prototipo reacciona en la siguiente lectura. "
@@ -169,8 +169,8 @@ void configureRoleRoutes() {
     if(!corePostAllowed())return;uint64_t on,off,sample,confirmation,heartbeat,sleep,dowake;
     if(!readUnsigned("on",on)||!readUnsigned("off",off)||!readUnsigned("sample",sample)||!readUnsigned("confirm_ms",confirmation)||
        !readUnsigned("heartbeat",heartbeat)||!readUnsigned("sleep",sleep)||!readUnsigned("dowake",dowake)||
-       on>3900||off>4095||off<=on||sample<10||sample>60000||confirmation>60000||heartbeat<1||heartbeat>86400||sleep<1||sleep>86400||dowake>1){web.send(400,"text/plain","Configuracion invalida");return;}
-    Operational op=getOperational();op.on=on;op.off=off;op.sampleMs=sample;op.confirmMs=confirmation;op.heartbeatMs=heartbeat*1000;op.sleepMs=sleep*1000;op.doWake=dowake;
+       on>3900||off>4095||off<=on||sample<10||sample>60000||confirmation>60000||heartbeat<1000||heartbeat>86400000||sleep<1000||sleep>86400000||dowake>1){web.send(400,"text/plain","Configuracion invalida");return;}
+    Operational op=getOperational();op.on=on;op.off=off;op.sampleMs=sample;op.confirmMs=confirmation;op.heartbeatMs=heartbeat;op.sleepMs=sleep;op.doWake=dowake;
     if(!applyOperational(op)){web.send(500,"text/plain","Error al guardar");return;}
     recordEvent("sensor_config");web.send(200,"text/plain","Configuracion guardada");
   });
@@ -232,7 +232,7 @@ String getStatusJson() {
     ",\"contact_nc\":"+String(receiver.config&128?"true":"false")+",\"polarity\":"+String(receiver.config&64?1:0)+",\"command_result\":\""+commandResult+"\""+
     ",\"policy\":"+String((receiver.config>>1)&3)+",\"loss\":"+String((receiver.config>>3)&3)+",\"loss_seconds\":"+u64(receiver.echo/1000)+
     ",\"on\":"+String(rainOnThreshold)+",\"off\":"+String(rainOffThreshold)+",\"sample\":"+String(testSampleMs)+",\"confirm_ms\":"+String(confirmMs)+
-    ",\"heartbeat\":"+String(heartbeatSeconds)+",\"sleep\":"+String(sleepSeconds)+",\"dowake\":"+String(doWakeEnabled?1:0)+
+    ",\"heartbeat\":"+String(heartbeatMs)+",\"sleep\":"+String(sleepMs)+",\"dowake\":"+String(doWakeEnabled?1:0)+
     ",\"recording\":"+String(recording?"true":"false")+",\"record_elapsed_ms\":\""+u64(recording?uptimeMs()-recordStarted:recordElapsed)+"\""+
     ",\"record_start_utc\":\""+recordStartIso+"\",\"record_capacity_bytes\":"+String(RECORD_LIMIT)+",\"filesystem_ready\":"+String(fsReady?"true":"false")+
     ",\"record_rows\":"+String(recordRows)+",\"record_error\":\""+recordError+"\""+
@@ -275,7 +275,7 @@ void serviceRadio() {
     pendingFrame.config=requestedConfig;pendingFrame.pulseMs=requestedPulseMs;pendingFrame.echo=(uint64_t)requestedLossSeconds*1000;
     pendingFrame.flags=resetPending?1:0;pending=true;attempts=0;
   }
-  if(!pending&&now-lastTx>=(uint64_t)heartbeatSeconds*1000)queueState();
+  if(!pending&&now-lastTx>=(uint64_t)heartbeatMs)queueState();
   if(!pending)return;
   if(attempts>=3){sessionId=0;helloNonce=random64();if(!helloNonce)helloNonce=1;pending=false;awaitingAck=false;nextSend=now+helloBackoff;recordEvent("session_retry");return;}
   pendingFrame.session=sessionId;txStarted=uptimeMs();int16_t rc=transmitFrame(pendingFrame,onRadioReceive);
@@ -318,7 +318,7 @@ void loop() {
      ((!pending&&sessionId)||(!sessionId&&now>20000)||(now>30000&&!configPending&&!resetPending))&&now>2500&&now>=confirmMs+500){
     savedSignature=RTC_SIGNATURE;savedBoot=senderBoot;savedSeq=txSequence;savedSession=sessionId;savedWet=detector.wet;
     radio.sleep();oled.setPowerSave(1);digitalWrite(VEXT_CTRL,HIGH);WiFi.mode(WIFI_OFF);
-    esp_sleep_enable_timer_wakeup((uint64_t)sleepSeconds*1000000);
+    esp_sleep_enable_timer_wakeup((uint64_t)sleepMs*1000);
     if(doWakeEnabled&&!detector.wet&&digitalRead(PIN_RAIN_DO)==HIGH)esp_sleep_enable_ext1_wakeup_io(1ULL<<PIN_RAIN_DO,ESP_EXT1_WAKEUP_ANY_LOW);
     esp_deep_sleep_start();
   }
@@ -328,12 +328,12 @@ void loop() {
 uint64_t managementSession(){return sessionId;}
 void managementRxAction(){queueState();}
 void requestLink(){queueState();}
-Operational getOperational(){Operational op{};op.sampleMs=testSampleMs;op.confirmMs=confirmMs;op.heartbeatMs=heartbeatSeconds*1000;op.sleepMs=sleepSeconds*1000;op.on=rainOnThreshold;op.off=rainOffThreshold;op.prototype=corePrototype;op.display=coreDisplayEnabled;op.doWake=doWakeEnabled;op.role=1;return op;}
+Operational getOperational(){Operational op{};op.sampleMs=testSampleMs;op.confirmMs=confirmMs;op.heartbeatMs=heartbeatMs;op.sleepMs=sleepMs;op.on=rainOnThreshold;op.off=rainOffThreshold;op.prototype=corePrototype;op.display=coreDisplayEnabled;op.doWake=doWakeEnabled;op.role=1;return op;}
 bool applyOperational(const Operational &op){
   if(op.role!=1||op.sampleMs<10||op.sampleMs>60000||op.confirmMs>60000||op.heartbeatMs<1000||op.heartbeatMs>86400000||op.sleepMs<1000||op.sleepMs>86400000||op.on>3900||op.off>4095||op.off<=op.on||op.prototype>1||op.doWake>1)return false;
   // Whole operational update is one NVS entry; loaded atomically after restart.
   Preferences p;if(!p.begin("rainop",false))return false;bool ok=p.putBytes("settings",&op,sizeof(op))==sizeof(op);p.end();
-  if(ok){testSampleMs=op.sampleMs;confirmMs=op.confirmMs;heartbeatSeconds=(op.heartbeatMs+999)/1000;sleepSeconds=(op.sleepMs+999)/1000;rainOnThreshold=op.on;rainOffThreshold=op.off;corePrototype=op.prototype;doWakeEnabled=op.doWake;coreSaveDevice();}
+  if(ok){testSampleMs=op.sampleMs;confirmMs=op.confirmMs;heartbeatMs=op.heartbeatMs;sleepMs=op.sleepMs;rainOnThreshold=op.on;rainOffThreshold=op.off;corePrototype=op.prototype;doWakeEnabled=op.doWake;coreSaveDevice();}
   return ok;
 }
 

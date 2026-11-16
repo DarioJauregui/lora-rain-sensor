@@ -166,7 +166,7 @@ if($('theme')){
 
     if(!/^(sample|confirm_ms|heartbeat|sleep|loss_seconds|remote_sample|remote_confirm_ms|remote_heartbeat_ms|remote_sleep_ms)$/.test(input.name))return;
 
-    const label=input.closest('label'),name=input.name,unit= /^(heartbeat|sleep|loss_seconds)$/.test(name)?1000:1;
+    const label=input.closest('label'),name=input.name,unit= /^(loss_seconds)$/.test(name)?1000:1;
 
     let n=BigInt(input.value||0)*BigInt(unit);const field=document.createElement('fieldset');field.className='duration';field.dataset.time=name;field.dataset.unit=String(unit);
 

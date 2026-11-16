@@ -1,8 +1,44 @@
-# LoRa Rain Sensor
+# LoraRainSensor 1.2.0-prototype
 
-Firmware para una pareja de Heltec WiFi LoRa 32 V3: el emisor lee un sensor de humedad y el receptor activa un relé. Comunicación LoRa punto a punto y configuración mediante un portal Wi-Fi local, sin servicios externos.
+Versión de desarrollo para Heltec WiFi LoRa 32 V3. **Protocolo 3: actualizar ambos nodos.** Las pruebas de compilación no validan el montaje ni la precisión física de un relé.
 
-**Versión en desarrollo: 1.1.0-prototype.** El nuevo protocolo requiere actualizar ambos nodos. No es compatible por radio con 1.0.0-rc. El montaje y la respuesta eléctrica requieren comprobación antes del uso.
+## Descargas públicas y primer arranque
+
+Los binarios publicados en la release `v1.2.0-prototype` no contienen claves privadas de emparejamiento. Emisor, Receptor-NO y Receptor-NC son imágenes de aplicación para OTA o dirección de aplicación `0x10000`, con las particiones por defecto de 8 MB. No son imágenes completas de flash. Se publican sumas SHA-256 junto a los archivos.
+
+En cada equipo, conecta al Wi-Fi mostrado en OLED, abre `192.168.4.1` e inicia sesión con `admin` y la contraseña individual de la pantalla. En Emparejamiento LoRa configura **la misma clave aleatoria privada de 32 bytes (64 dígitos hexadecimales)** en ambos equipos. Se guarda en NVS, nunca en el binario. Hasta entonces no se transmiten órdenes LoRa. Las claves antiguas incorporadas en otro firmware no se migran automáticamente. Tras borrar toda la flash, genera una clave nueva: no reutilices una clave anterior con los contadores criptográficos borrados.
+
+## Interfaz y mediciones
+
+Nombre LoraRainSensor; tema claro/oscuro/automático persistido en el navegador. Se separan Este dispositivo y Dispositivo remoto. Las duraciones se editan en Horas | Minutos | Segundos | Milisegundos. Calibración muestra AO, DO y estado; AO es un ADC 0–4095. Los umbrales diferentes de entrada/salida crean histéresis. Prototipo detecta en la siguiente lectura; producción puede exigir una condición estable y retrasarse durante el sueño.
+
+El botón **↻** solicita una nueva comunicación LoRa, respetando cola, reintentos y presupuesto de radio. No convierte datos antiguos en nuevos. Si el emisor duerme, la operación espera una ventana de recepción. La telemetría distingue datos locales, recibidos y su antigüedad.
+
+Porcentaje de calidad estimado: 35 % de RSSI normalizado entre −125 y −65 dBm, 25 % de SNR entre −12 y +10 dB y 40 % de confirmaciones sobre transmisiones reales. Cada componente se limita a 0–100. En RX la recepción autenticada aporta el componente de entrega; RX no puede conocer intentos TX que nunca recibió. No es cobertura calibrada, distancia ni intensidad de lluvia. Sin información vigente: `--%`. OLED reserva cuatro filas superiores para estados y la banda inferior para temporizador compacto y porcentaje grande, sin solaparlos.
+
+## Contacto y habilitación
+
+`RAIN_CONTACT_NC=0` selecciona COM-NO (por defecto); `=1` selecciona COM-NC. Es una constante de compilación exclusiva del receptor. Se comunica al emisor únicamente para informar del estado esperado. No se cambia desde Wi-Fi ni LoRa. La polaridad de la bobina es independiente.
+
+ABIERTO/CERRADO indica el estado esperado a partir de la orden eléctrica, **sin realimentación física**. Sin energía: NO queda abierto, NC cerrado. Deshabilitar el control automático desenergiza la bobina; por tanto su efecto depende del contacto cableado. Habilitar requiere `ARMAR`, información válida y ausencia de mantenimiento. Las políticas de activación, pérdida de enlace, pulsos y rearme se conservan. NC no implica una condición más segura; validar eléctricamente el montaje de banco antes de conectar una carga.
+
+## Administración bidireccional y credenciales
+
+Desde TX se configuran los pulsos, habilitación y políticas RX. Desde RX se consultan y ajustan umbrales, lectura, confirmación, telemetría, suspensión, modo y DO de TX. La configuración operativa TX se guarda en una entrada NVS atómica. Las órdenes sensibles muestran Pendiente de envío, Esperando dispositivo, Pendiente de confirmación, Aplicada, Rechazada o Sin confirmación. Aplicada significa que el remoto validó y guardó; un envío de radio por sí solo no la confirma.
+
+Cada portal permite cambiar el SSID y contraseña de su equipo o del remoto. Usuario fijo `admin`; contraseña común a WPA2 y web: 16–63 caracteres ASCII imprimibles sin espacios, al menos una letra y un número. SSID de 1–32 caracteres ASCII imprimibles. El cambio de acceso es una única entrada atómica, independiente de la clave LoRa. Se programa un reinicio con 20 s de margen para confirmar/reintentar; el cambio puede interrumpir la salida RX. Conserva la contraseña introducida y reconecta al SSID nuevo. La consulta remota permite reconocer su SSID sin devolver la contraseña.
+
+Recuperación física: mantener el botón GPIO0 pulsado cinco segundos durante el inicio del portal. Se elimina solo el acceso personalizado y se genera una nueva contraseña aleatoria visible en OLED. No se borran emparejamiento, contadores de nonce, ajustes del relé ni grabaciones. No se imprimen contraseñas en serie.
+
+Los mensajes de administración usan AES-256-GCM con clave derivada de la clave HMAC mediante HKDF-SHA256 y dominio independiente. El nonce de 96 bits combina dirección del emisor y contador de 64 bits; se reservan bloques atómicos de 1024 en NVS antes de utilizarlos, por lo que un reinicio no repite nonces. Sesión, origen, tipo, secuencia e identificador de transacción forman parte de los datos autenticados. Se rechazan sesiones ajenas, secuencias antiguas y paquetes alterados; se reutiliza la respuesta de una operación duplicada sin reaplicarla. Máximo tres intentos por operación; el dispositivo dormido espera su ventana. Confirmaciones perdidas no se presentan como éxito: consultar el remoto o usar la recuperación física.
+
+Los límites SSID/contraseña caben juntos en un mensaje cifrado de 100 bytes: una trama completa de 216 bytes, inferior al máximo LoRa de 255. No hace falta fragmentación para ninguna operación admitida; no se aceptan tamaños mayores. Estados ordinarios usan 88 bytes. Todos conservan HMAC, versión y presupuesto de tiempo en aire. Credenciales nunca se incluyen en CSV, diagnóstico o respuestas de aplicación.
+
+## Compilación y comprobaciones
+
+ESP32 3.3.2, RadioLib 7.8.1, U8g2 2.36.17; biblioteca compartida `libraries/RainLink`. No se necesita `pair_key.h` para compilar. Para NC añadir `--build-property compiler.cpp.extra_flags=-DRAIN_CONTACT_NC=1`. CI comprueba lógica, contactos NO/NC, estimación de calidad, interfaz y HKDF/AES-GCM (ida y vuelta y alteración de cifrado, tag, nonce, AAD y clave), compila las tres variantes y solo después publica los binarios públicos de desarrollo. No se publica una versión estable sin pruebas en placas.
+
+## Registro y comportamiento conservados
 
 ## Modos e interfaz
 
@@ -47,7 +83,7 @@ Columnas: tiempo, evento, AO/DO, estado y origen, batería, antigüedad del ACK,
 
 ## Radio y recuperación
 
-868,3 MHz, BW125, SF7, CR4/5, 10 dBm. HMAC-SHA256 truncado a 128 bits; autentica, no cifra. Sesión con desafío aleatorio ligado a un nonce del emisor y números de secuencia. No depende de contadores crecientes en flash: borrar ajustes del emisor no lo bloquea por tener un contador menor. La clave compartida debe seguir coincidiendo.
+868,3 MHz, BW125, SF7, CR4/5, 10 dBm. HMAC-SHA256 truncado a 128 bits; la administración usa además AES-GCM. Sesión con desafío aleatorio ligado a un nonce del emisor y números de secuencia. No depende de contadores crecientes en flash: borrar ajustes del emisor no lo bloquea por tener un contador menor. La clave compartida debe seguir coincidiendo.
 
 La lluvia pendiente se conserva hasta recibir confirmación, aunque el sensor vuelva a seco. Se guarda en NVS al producirse y confirmarse el evento; varios episodios durante una interrupción se agrupan en una activación pendiente. Las retransmisiones conservan el contenido y secuencia originales; no sustituyen un evento en vuelo.
 
@@ -72,26 +108,6 @@ Referencias de implementación: [tiempo de emisión de RadioLib](https://jgromes
 Sensor previsto a 3,3 V. La polaridad del divisor de batería depende de la revisión de placa; si no se identifica, se comunica batería desconocida. El firmware no verifica continuidad del sensor. Un sensor desconectado no puede diagnosticarse de forma fiable únicamente con estos umbrales.
 
 GPIO5 controla una etapa NPN, no una bobina directamente. Revisar polaridad, resistencias, alimentación del módulo y contactos antes de armar. Este listado es una asignación de firmware; el esquema eléctrico y el montaje siguen pendientes de validación.
-
-## Compilar
-
-Dependencias reproducibles usadas por CI:
-
-- ESP32 by Espressif Systems **3.3.2**.
-- RadioLib **7.8.1** y U8g2 **2.36.17**.
-- Placa `esp32:esp32:heltec_wifi_lora_32_V3`, particiones por defecto de 8 MB con OTA y sistema de archivos.
-- Biblioteca local `libraries/RainLink` incluida en este repositorio.
-
-Para Arduino IDE, copiar la carpeta `libraries/RainLink` a la carpeta `libraries` del sketchbook. Abrir cada sketch por separado. Para Arduino CLI, desde la raíz:
-
-```sh
-arduino-cli compile --fqbn esp32:esp32:heltec_wifi_lora_32_V3 --libraries libraries Emisor
-arduino-cli compile --fqbn esp32:esp32:heltec_wifi_lora_32_V3 --libraries libraries Receptor
-```
-
-Copiar `pair_key.example.h` como `pair_key.h` en cada sketch, generar 32 bytes aleatorios y poner la misma clave en ambos; eliminar `#error`. No publicar la clave ni binarios que la incorporen. `tools/ci_key.py` genera exclusivamente claves desechables para compilación de prueba; nunca sustituye archivos existentes.
-
-Al migrar desde 1.0.0-rc, los nuevos ajustes del receptor usan otro espacio NVS y la salida comienza desarmada. Reconfigurar ambos nodos. Las actualizaciones OTA mantienen el receptor en mantenimiento desenergizado hasta reiniciar, también si se cancela o falla la carga. Solo se comprueba el nombre de rol del archivo; no hay firma criptográfica de firmware. Conectar la antena antes de transmitir.
 
 ## Comprobaciones
 
