@@ -133,6 +133,7 @@ void beforeOta();
 void managementRoutes();
 void managementTick();
 void requestLink();
+String compactTime(uint64_t ms){if(ms>=3600000)return u64(ms/3600000)+"h";if(ms>=60000)return u64(ms/60000)+"m"+u64(ms/1000%60);if(ms>=1000)return u64(ms/1000)+"s";return u64(ms)+"ms";}
 int coreQuality=-1;
 String coreTimer;
 void coreSaveDevice() {
@@ -451,6 +452,7 @@ void coreStopPortal() {
 }
 
 void coreTickPortal() {
+  if(coreRebootAtMs && (int32_t)(millis()-coreRebootAtMs)>=0 && !coreOtaInProgress)ESP.restart();
   if (!coreApActive) return;
   web.handleClient();
   if (coreRebootAtMs && (int32_t)(millis() - coreRebootAtMs) >= 0) ESP.restart();

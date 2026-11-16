@@ -40,7 +40,7 @@ bool saveAccess(const char *ssid,const char *pass){
   strlcpy(a.ssid,ssid,33);strlcpy(a.pass,pass,64);
   Preferences p;if(!p.begin("rainaccess",false))return false;
   bool ok=p.putBytes("access",&a,sizeof(a))==sizeof(a);p.end();
-  if(ok)coreRebootAtMs=millis()+5000; // ACK precedes AP restart; duplicate requests reuse cached reply.
+  if(ok)coreRebootAtMs=millis()+20000; // ACK precedes AP restart; duplicate requests reuse cached reply.
   memset(&a,0,sizeof(a));return ok;
 }
 bool mgKey(uint8_t *key){

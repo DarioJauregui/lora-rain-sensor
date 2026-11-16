@@ -316,7 +316,7 @@ void loop() {
   if(now-lastScreen>=1000){lastScreen=now;coreQuality=rain::quality(lastRssi,lastSnr,linkOk(),ackedStates,sentStates);
     if(coreApActive&&now<30000)coreDisplayPortalIfNeeded();else coreScreen("LoraRainSensor TX",wetNow()?"MOJADO":"SECO",simulation>=0?"SIMULACION":"SENSOR",
       linkOk()?"ACK OK":"SIN CONFIRMACION","RSSI "+String(lastRssi,0),recording?"GRABANDO":"");}
-  if((!lastAck||now-lastAck>2000)&&!mgWaiting&&!corePrototype&&!coreApActive&&!coreMaintenance&&!recording&&!awaitingAck&&
+  if((!lastAck||now-lastAck>2000)&&!coreRebootAtMs&&!mgWaiting&&!corePrototype&&!coreApActive&&!coreMaintenance&&!recording&&!awaitingAck&&
      ((!pending&&sessionId)||(!sessionId&&now>20000)||(now>30000&&!configPending&&!resetPending))&&now>2500&&now>=confirmMs+500){
     savedSignature=RTC_SIGNATURE;savedBoot=senderBoot;savedSeq=txSequence;savedSession=sessionId;savedWet=detector.wet;
     radio.sleep();oled.setPowerSave(1);digitalWrite(VEXT_CTRL,HIGH);WiFi.mode(WIFI_OFF);

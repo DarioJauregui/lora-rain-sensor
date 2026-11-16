@@ -46,9 +46,9 @@ function paint(d){
 
   $('link').textContent=fresh?'Confirmado':age===null?'Sin confirmar':'Sin enlace';
 
-  $('age').textContent=age===null?'AÃºn sin respuesta':`${(Number(age)/1000).toFixed(1)} s desde la respuesta`;
+  $('age').textContent=age===null?'Aún sin respuesta':`${(Number(age)/1000).toFixed(1)} s desde la respuesta`;
 
-  $('rain').textContent=d.wet?'Mojado':'Seco';$('source').textContent=d.simulated?'SimulaciÃ³n activa':'Sensor fÃ­sico';
+  $('rain').textContent=d.wet?'Mojado':'Seco';$('source').textContent=d.simulated?'Simulación activa':'Sensor físico';
 
   const closed=d.contact_nc?!d.rx_coil:!!d.rx_coil;
 
@@ -56,23 +56,23 @@ function paint(d){
 
   $('remaining').textContent=d.rx_restored?'Rearme manual pendiente':`${durationText(d.remaining_ms)}${tx?' al recibir ACK':''}`;
 
-  if($('contactInfo'))$('contactInfo').textContent=`Contacto: ${d.contact_nc?'NC':'NO'} Â· Estado esperado, sin realimentaciÃ³n. AutomÃ¡tico: ${d.rx_armed?'habilitado':'deshabilitado'}. Sin energÃ­a: ${d.contact_nc?'cerrado':'abierto'}.`;
+  if($('contactInfo'))$('contactInfo').textContent=`Contacto: ${d.contact_nc?'NC':'NO'} · Estado esperado, sin realimentación. Automático: ${d.rx_armed?'habilitado':'deshabilitado'}. Sin energía: ${d.contact_nc?'cerrado':'abierto'}.`;
 
-  $('signal').textContent=age===null?'â€”':`${d.rssi_dbm} dBm`;$('snr').textContent=age===null?'â€”':`SNR ${d.snr_db} dB`;
+  $('signal').textContent=age===null?'—':`${d.rssi_dbm} dBm`;$('snr').textContent=age===null?'—':`SNR ${d.snr_db} dB`;
 
-  $('radioNote').textContent=BigInt(d.duty_wait_ms||0)>0?`Radio en espera por tiempo de emisiÃ³n: ${Math.ceil(Number(d.duty_wait_ms)/1000)} s. Los eventos pendientes se conservan.`:`Radio: SF${d.sf}, ${d.frequency_mhz} MHz Â· ${d.airtime_ms} ms por trama. Las lecturas cambian con cada intercambio.`;
+  $('radioNote').textContent=BigInt(d.duty_wait_ms||0)>0?`Radio en espera por tiempo de emisión: ${Math.ceil(Number(d.duty_wait_ms)/1000)} s. Los eventos pendientes se conservan.`:`Radio: SF${d.sf}, ${d.frequency_mhz} MHz · ${d.airtime_ms} ms por trama. Las lecturas cambian con cada intercambio.`;
 
-  if($('sensorLive'))$('sensorLive').textContent=`AO ${d.ao} / 4095 Â· DO ${d.do??'â€”'} Â· ${d.wet?'Mojado':'Seco'}${d.simulated?' (simulaciÃ³n)':''}`;
+  if($('sensorLive'))$('sensorLive').textContent=`AO ${d.ao} / 4095 · DO ${d.do??'—'} · ${d.wet?'Mojado':'Seco'}${d.simulated?' (simulación)':''}`;
 
-  if($('remoteState'))$('remoteState').textContent=`${d.management_state||'Sin operaciones'}${d.remote_ssid?' Â· SSID remoto: '+d.remote_ssid:''}`;
+  if($('remoteState'))$('remoteState').textContent=`${d.management_state||'Sin operaciones'}${d.remote_ssid?' · SSID remoto: '+d.remote_ssid:''}`;
 
-  $('connection').textContent='Wi-Fi conectado Â· datos actualizados';
+  $('connection').textContent='Wi-Fi conectado · datos actualizados';
 
   if($('receiverCommand'))$('receiverCommand').textContent=d.config_pending?'Pendiente de confirmar':d.command_result||'';
 
   if($('recordState')){
 
-    $('recordState').textContent=d.recording?`Grabando Â· ${durationText(d.record_elapsed_ms)} Â· ${d.record_rows} filas`:`${d.record_rows} filas Â· ${d.record_error||'Detenido'}`;
+    $('recordState').textContent=d.recording?`Grabando · ${durationText(d.record_elapsed_ms)} · ${d.record_rows} filas`:`${d.record_rows} filas · ${d.record_error||'Detenido'}`;
 
     $('startRecord').disabled=d.recording||d.filesystem_ready===false||!d.prototype;$('stopRecord').disabled=!d.recording;
 
@@ -110,11 +110,11 @@ function paint(d){
 
   const ordered=[];let left=Object.entries(d);for(const [title,pattern]of groups){const rows=left.filter(([k])=>pattern.test(k));left=left.filter(([k])=>!pattern.test(k));if(rows.length)ordered.push([title,'Local / último dato remoto indicado por rx_ o remote_'],...rows);}
 
-  $('data').replaceChildren(...ordered.map(([key,value])=>{const row=document.createElement('tr');for(const t of [key,value===null?'â€”':String(value)]){const cell=document.createElement('td');cell.textContent=t;row.append(cell);}return row;}));
+  $('data').replaceChildren(...ordered.map(([key,value])=>{const row=document.createElement('tr');for(const t of [key,value===null?'—':String(value)]){const cell=document.createElement('td');cell.textContent=t;row.append(cell);}return row;}));
 
 }
 
-async function refresh(){try{const r=await fetch('/status',{cache:'no-store'});if(!r.ok)throw Error(`HTTP ${r.status}`);paint(await r.json());}catch(e){$('connection').textContent='Sin conexiÃ³n Wi-Fi Â· los datos visibles son anteriores';}}
+async function refresh(){try{const r=await fetch('/status',{cache:'no-store'});if(!r.ok)throw Error(`HTTP ${r.status}`);paint(await r.json());}catch(e){$('connection').textContent='Sin conexión Wi-Fi · los datos visibles son anteriores';}}
 
 document.querySelectorAll('form[data-save]').forEach(form=>form.addEventListener('submit',async e=>{
 
@@ -142,7 +142,7 @@ if($('confirmRecord')){
 
 }
 
-$('restart').addEventListener('click',async()=>{if(confirm('Â¿Reiniciar? Se interrumpe el servicio de este nodo.'))try{$('notice').textContent=await post('/restart');}catch(e){$('notice').textContent=e.message;}});
+$('restart').addEventListener('click',async()=>{if(confirm('¿Reiniciar? Se interrumpe el servicio de este nodo.'))try{$('notice').textContent=await post('/restart');}catch(e){$('notice').textContent=e.message;}});
 
 if($('theme')){
 

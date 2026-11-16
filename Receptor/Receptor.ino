@@ -179,7 +179,7 @@ void loop(){
   static uint64_t lastScreen=0;uint64_t now=uptimeMs();
   if(now-lastScreen>=1000){lastScreen=now;
     if(coreApActive&&now<30000)coreDisplayPortalIfNeeded();else {
-      ControlGuard lock;coreQuality=rain::quality(lastRssi,lastSnr,!commsLost,rxCount,rxCount);coreTimer=pulse.active?String((unsigned long)(pulse.remaining(now)/1000))+"s":"";coreScreen("LoraRainSensor RX",rain::contactClosed(CONTACT_NC,coilOn)?"RELE CERRADO":"RELE ABIERTO",lastRain?"MOJADO":"SECO",commsLost?"SIN ENLACE":"ENLACE OK",
+      ControlGuard lock;coreQuality=rain::quality(lastRssi,lastSnr,!commsLost,rxCount,rxCount);coreTimer=pulse.active?compactTime(pulse.remaining(now)):"";coreScreen("LoraRainSensor RX",rain::contactClosed(CONTACT_NC,coilOn)?"RELE CERRADO":"RELE ABIERTO",lastRain?"MOJADO":"SECO",commsLost?"SIN ENLACE":"ENLACE OK",
         "BOBINA "+String(coilOn?"ON":"OFF"),controlArmed?"ARMADO":"DESARMADO");}}
   delay(1);
 }
