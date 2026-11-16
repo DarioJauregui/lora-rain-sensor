@@ -1,12 +1,36 @@
-# LoraRainSensor 1.2.0-prototype
+# LoraRainSensor 1.3.0-prototype
 
 Versión de desarrollo para Heltec WiFi LoRa 32 V3. **Protocolo 3: actualizar ambos nodos.** Las pruebas de compilación no validan el montaje ni la precisión física de un relé.
 
 ## Descargas públicas y primer arranque
 
-Los binarios publicados en la release `v1.2.0-prototype` no contienen claves privadas de emparejamiento. Emisor, Receptor-NO y Receptor-NC son imágenes de aplicación para OTA o dirección de aplicación `0x10000`, con las particiones por defecto de 8 MB. No son imágenes completas de flash. Se publican sumas SHA-256 junto a los archivos.
+Los binarios publicados en la release `v1.3.0-prototype` no contienen claves privadas de emparejamiento. Emisor, Receptor-NO y Receptor-NC son imágenes de aplicación para OTA o dirección de aplicación `0x10000`, con las particiones por defecto de 8 MB. No son imágenes completas de flash. Se publican sumas SHA-256 junto a los archivos.
 
 En cada equipo, conecta al Wi-Fi mostrado en OLED, abre `192.168.4.1` e inicia sesión con `admin` y la contraseña individual de la pantalla. En Emparejamiento LoRa configura **la misma clave aleatoria privada de 32 bytes (64 dígitos hexadecimales)** en ambos equipos. Se guarda en NVS, nunca en el binario. Hasta entonces no se transmiten órdenes LoRa. Las claves antiguas incorporadas en otro firmware no se migran automáticamente. Tras borrar toda la flash, genera una clave nueva: no reutilices una clave anterior con los contadores criptográficos borrados.
+
+## Registro de cobertura y GPS complementario
+
+App instalable HTTPS: `https://dariojauregui.github.io/lora-rain-sensor/`. El código está en `docs/`, sin dependencias, mapas externos ni servicios de datos. Las posiciones permanecen en IndexedDB del dispositivo de prueba. Un service worker prepara la app para uso sin Internet después de abrirla una vez en HTTPS. La instalación se hace desde la opción del navegador de añadir a la pantalla de inicio.
+
+Flujo del recorrido:
+
+1. Preparar la app con Internet antes de desplazarse y comprobar «Disponible sin conexión».
+2. Conectar al Wi-Fi TX y pulsar Grabar en el portal. El CSV original sigue guardándose en LittleFS.
+3. Pulsar «Abrir GPS / sincronizar referencia». El portal consulta el contador monotónico de la grabación y guarda un JSON con identificador, inicio UTC, contador observado, hora central de la petición y semiancho de RTT como incertidumbre aproximada. Abrir el enlace App GPS o importar ese JSON en la app.
+4. En la app pulsar Activar GPS y permitir ubicación. Se guardan latitud, longitud, precisión y timestamp del navegador; velocidad, rumbo y altitud son opcionales. Se registran nuevas posiciones con desplazamiento de al menos 5 m o tras 5 s entre posiciones recibidas. No se fabrican lecturas para completar ese intervalo.
+5. Mantener la app GPS visible. El sistema puede suspender geolocalización en segundo plano o con pantalla bloqueada. La opción de mantener pantalla despierta usa Wake Lock solo cuando esté disponible. Para ver LoRa en directo, usar el portal; la app HTTPS no realiza peticiones mixtas al HTTP de la Heltec.
+6. Se pueden marcar puntos y observaciones desde la Heltec o desde la app GPS. Los del móvil se identifican como tales.
+7. Al terminar, detener GPS y descargar el registro GPS JSON como copia de seguridad. Descargar el CSV original de la Heltec e importarlo en la app. Exportar CSV combinado; también se puede descargar solo el GPS CSV. Sin permiso GPS o sin posiciones se conservan todas las filas de radio.
+
+El GPS puede funcionar sin referencia importada: la unión utiliza entonces `start_utc + elapsed_ms`. Con referencia utiliza el anclaje observado del contador y publica aparte `aligned_timestamp_utc` y `sync_uncertainty_ms`; no altera el timestamp ni los valores LoRa originales. La incertidumbre es una cota de sincronización por latencia observada, no una certificación del reloj del móvil. Cambios del reloj del sistema o deriva posterior pueden afectar la alineación; pueden importarse referencias adicionales de la misma sesión. No se cambia el reloj RTC que controla el presupuesto de radio.
+
+La asociación usa la última posición anterior a cada fila dentro de una antigüedad configurable (15 s por defecto). Nunca usa una posición futura ni interpola coordenadas. Se añaden también todas las posiciones y marcas móviles como filas `gps_position` y `gps_marker`, para que ninguna muestra GPS quede fuera por no coincidir con radio. `record_source` distingue `heltec` y `test_device`; `gps_source` identifica el móvil/ordenador de prueba. GPS ausente o caducado queda explícito. No equivale a la ubicación física de las placas.
+
+Las 29 columnas originales permanecen en su orden y significado. Se añaden timestamps UTC por fila, huecos para GPS, identificador de grabación, secuencias, sesión, intentos, resultado del intercambio, RTT del evento confirmado, edad del remoto, interrupciones y tiempos acumulados de radio/espera. `lastRtt` y los campos de señal originales siguen siendo la última medición disponible; solo `event_rtt_ms` en una fila ACK es una nueva medición confirmada. Las columnas de generación y confirmación son instantes distintos del contador monotónico. Las muestras de snapshot no son nuevos paquetes. Los nombres TX→RX y RX→TX se explicitan en las columnas de señal añadidas.
+
+La grabación móvil persiste aunque se interrumpa Wi-Fi. Borrar datos del navegador o desinstalar la app puede borrar las sesiones locales: exportar JSON al terminar. La Heltec no depende de permisos GPS, IndexedDB, Internet ni del móvil para conservar su CSV. Tras un reinicio la grabación LoRa anterior permanece descargable, sin reanudarse automáticamente. Ambas partes conservan lo que realmente pudieron recoger.
+
+Pruebas añadidas: UTC y fechas bisiestas, timestamps posteriores a 2038, CSV con comas/comillas/saltos de línea, preservación de columnas originales, rechazo de identificadores de otra sesión, huecos GPS, alineación temporal, marcas y exportación sin posiciones. El permiso real y la continuidad de GPS deben comprobarse en el móvil que se utilice.
 
 ## Interfaz y mediciones
 
