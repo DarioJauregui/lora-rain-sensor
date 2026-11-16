@@ -174,7 +174,7 @@ void setup(){
   coreStartPortal(false);
 }
 void loop(){
-  coreTickPortal();processReceived();managementTick();
+  coreTickRadioStats();coreTickPortal();processReceived();managementTick();
   if(persistDirty&&!persistSettings()){coreMaintenance=true;ControlGuard lock;setPhysicalCoil(false);}
   static uint64_t lastScreen=0;uint64_t now=uptimeMs();
   if(now-lastScreen>=1000){lastScreen=now;

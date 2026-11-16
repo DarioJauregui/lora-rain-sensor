@@ -178,6 +178,15 @@ if($('theme')){
 
 }
 
+if($('gpsReference'))$('gpsReference').addEventListener('click',async()=>{
+  try{const before=Date.now(),r=await fetch('/record/session',{cache:'no-store'}),d=await r.json(),after=Date.now();
+    if(!r.ok||!d.recording)throw Error('Inicia la grabación LoRa primero');
+    const reference={...d,client_utc_ms:(before+after)/2,uncertainty_ms:(after-before)/2,reference_version:1};
+    $('gpsApp').href='https://dariojauregui.github.io/lora-rain-sensor/#ref='+encodeURIComponent(JSON.stringify(reference));
+    $('gpsStatus').textContent='Referencia preparada. Pulsa App GPS para guardarla y activar la ubicación. El GPS no bloquea la grabación LoRa.';
+    const blob=new Blob([JSON.stringify(reference,null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='rain-reference-'+d.recording_id+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),2000);
+  }catch(e){$('gpsStatus').textContent=e.message;}
+});
 refresh();setInterval(refresh,1000);
 
 )JS"

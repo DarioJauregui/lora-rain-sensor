@@ -9,6 +9,7 @@ concurrency:
   cancel-in-progress: true
 permissions:
   contents: write
+  pages: write
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -21,6 +22,11 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror -fsanitize=undefined,address -I libraries/RainLink/src tests/logic_test.cpp -o /tmp/rain-logic-test
           /tmp/rain-logic-test
           node tests/portal_test.mjs
+          node tests/coverage_test.mjs
+          c++ -std=c++17 -Wall -Wextra -Werror -I libraries/RainLink/src tests/log_test.cpp -o /tmp/rain-log-test
+          /tmp/rain-log-test
+          node --check docs/app.mjs
+          node --check docs/sw.js
           c++ -std=c++17 -Wall -Wextra -Werror -I libraries/RainLink/src tests/crypto_test.cpp -lmbedcrypto -o /tmp/rain-crypto-test
           /tmp/rain-crypto-test
       - uses: arduino/setup-arduino-cli@v2
@@ -50,5 +56,13 @@ jobs:
           cp artifacts/RX/Receptor.ino.bin artifacts/LoraRainSensor-Receptor-NO.bin
           cp artifacts/RX-NC/Receptor.ino.bin artifacts/LoraRainSensor-Receptor-NC.bin
           sha256sum artifacts/LoraRainSensor-*.bin > artifacts/SHA256SUMS.txt
-          gh release view v1.2.0-prototype || gh release create v1.2.0-prototype --target "${{ github.event.pull_request.head.sha || github.sha }}" --prerelease --title 'LoraRainSensor 1.2.0 prototype' --notes 'Public unpaired application binaries for Heltec V3. Configure the same private LoRa key locally on both devices. Receiver variants NO and NC must match wiring. Development release; hardware acceptance tests pending. Upload these application binaries using OTA or at application offset 0x10000 over USB; keep the default 8 MB partition table.'
-          gh release upload v1.2.0-prototype artifacts/LoraRainSensor-*.bin artifacts/SHA256SUMS.txt --clobber
+          gh release view v1.3.0-prototype || gh release create v1.3.0-prototype --target "${{ github.event.pull_request.head.sha || github.sha }}" --prerelease --title 'LoraRainSensor 1.3.0 prototype' --notes 'Public unpaired application binaries for Heltec V3. Configure the same private LoRa key locally on both devices. Receiver variants NO and NC must match wiring. Development release; hardware acceptance tests pending. Upload these application binaries using OTA or at application offset 0x10000 over USB; keep the default 8 MB partition table.'
+          gh release upload v1.3.0-prototype artifacts/LoraRainSensor-*.bin artifacts/SHA256SUMS.txt --clobber
+      - name: Enable HTTPS companion app on Pages
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh api "repos/$GH_REPO/pages" >/dev/null 2>&1 || gh api --method POST "repos/$GH_REPO/pages" -f 'source[branch]=codex/prototype-experiments' -f 'source[path]=/docs'
+          gh api --method POST "repos/$GH_REPO/pages/builds"

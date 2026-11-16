@@ -21,7 +21,7 @@
 #include "Portal.h"
 
 // Version shared by the two devices; Arduino-ESP32 core 3.3.2, RadioLib 7.8.1.
-static const char *FW_VERSION = "1.2.0-prototype";
+static const char *FW_VERSION = "1.3.0-prototype";
 static const uint32_t PROTOCOL_MAGIC = 0x52414E39UL;
 static const uint8_t PROTOCOL_VERSION = 3;
 static const uint32_t TX_ID = 0x54583031UL;
@@ -108,11 +108,15 @@ bool coreApActive = false;
 uint32_t coreCloseAtMs = 0;
 uint32_t coreTxCount = 0, coreTxErrors = 0, coreDutyDeferrals = 0;
 uint32_t coreFrameAirtimeMs = 650;
+uint64_t coreTotalAirtimeMs=0,coreTotalDutyWaitMs=0,coreStatsAt=0;
+
+
 uint64_t uptimeMs() { return (uint64_t)esp_timer_get_time() / 1000; }
 uint64_t rtcTimeMs() { timeval t; gettimeofday(&t, nullptr); return (uint64_t)t.tv_sec * 1000 + t.tv_usec / 1000; }
 String u64(uint64_t n) { char b[24]; snprintf(b, sizeof(b), "%llu", (unsigned long long)n); return String(b); }
 RTC_DATA_ATTR rain::Airtime coreAirtime;
 uint64_t coreDutyWaitMs() { return coreAirtime.wait(rtcTimeMs(), coreFrameAirtimeMs); }
+void coreTickRadioStats(){uint64_t now=uptimeMs();if(coreStatsAt&&coreDutyWaitMs())coreTotalDutyWaitMs+=now-coreStatsAt;coreStatsAt=now;}
 void recordEvent(const char *event);
 bool coreApPermanent = false;
 bool coreOtaInProgress = false;
@@ -227,7 +231,7 @@ int16_t transmitFrame(RainFrame &f, void (*onRx)(void)) {
   if (!coreAirtime.spend(rtcTimeMs(), cost)) {
     ++coreDutyDeferrals; return -32000;
   }
-  ++coreTxCount;
+  ++coreTxCount;coreTotalAirtimeMs+=cost;
   signFrame(f);
   radio.clearPacketReceivedAction();
   uint8_t wire[216];memcpy(wire,&f,72);if(wireSize==216)memcpy(wire+72,f.payload,128);memcpy(wire+wireSize-16,f.tag,16);
