@@ -7,8 +7,14 @@ struct __attribute__((packed)) Operational {
   uint32_t sampleMs, confirmMs, heartbeatMs, sleepMs;
   uint16_t on, off;
   uint8_t prototype, display, doWake, role;
+  uint64_t uptime;
+  uint32_t freeHeap,rxPackets,txPackets,errors;
+  uint16_t ao,battery;
+  int8_t doLevel;
+  uint8_t wet,simulated,reserved;
 };
 struct __attribute__((packed)) ManagementData { uint8_t kind, result; uint8_t bytes[98]; };
+static_assert(sizeof(Operational)+33<=98,"Snapshot and SSID fit in one encrypted reply");
 static_assert(sizeof(ManagementData)==100,"Encrypted payload size");
 bool applyOperational(const Operational &);
 Operational getOperational();
@@ -118,6 +124,7 @@ String managementStatus(){
   return ",\"paired\":"+String(corePaired?"true":"false")+",\"ssid\":\""+jsonEscape(coreApSsid)+"\",\"management_state\":\""+mgState+"\",\"remote_ssid\":\""+jsonEscape(mgPeerSsid)+"\",\"remote_known\":"+String(mgPeerKnown?"true":"false")+
     ",\"remote_sample\":"+String(mgPeer.sampleMs)+",\"remote_confirm_ms\":"+String(mgPeer.confirmMs)+",\"remote_heartbeat_ms\":"+String(mgPeer.heartbeatMs)+",\"remote_sleep_ms\":"+String(mgPeer.sleepMs)+
     ",\"remote_on\":"+String(mgPeer.on)+",\"remote_off\":"+String(mgPeer.off)+",\"remote_prototype\":"+String(mgPeer.prototype?1:0)+",\"remote_dowake\":"+String(mgPeer.doWake?1:0)+
+    ",\"remote_uptime_ms\":\""+u64(mgPeer.uptime)+"\",\"remote_free_heap\":"+String(mgPeer.freeHeap)+",\"remote_ao\":"+String(mgPeer.ao)+",\"remote_do\":"+String(mgPeer.doLevel)+",\"remote_battery_mv\":"+String(mgPeer.battery)+",\"remote_rx_packets\":"+String(mgPeer.rxPackets)+",\"remote_tx_packets\":"+String(mgPeer.txPackets)+",\"remote_errors\":"+String(mgPeer.errors)+
     ",\"free_heap\":"+String(ESP.getFreeHeap());
 }
 void managementRoutes(){

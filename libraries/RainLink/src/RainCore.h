@@ -144,6 +144,10 @@ void coreLoadDevice() {
   Preferences p; p.begin("raindevice", true);
   p.getBytes("key",PAIR_KEY,32); corePaired=p.getBytesLength("key")==32;
   corePrototype=p.getBool("prototype",true); coreDisplayEnabled=p.getBool("display",true); p.end();
+  struct Access {char ssid[33];char pass[64];} access{};
+  p.begin("rainaccess",true);bool loaded=p.getBytes("access",&access,sizeof(access))==sizeof(access);p.end();
+  if(loaded){access.ssid[32]=0;coreApSsid=access.ssid;}memset(&access,0,sizeof(access));
+
 }
 bool corePostAllowed() {
   if (coreMaintenance) { web.send(423,"text/plain","Mantenimiento activo. Reiniciar para recuperar."); return false; }

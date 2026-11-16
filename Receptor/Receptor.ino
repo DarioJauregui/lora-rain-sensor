@@ -187,7 +187,7 @@ void loop(){
 uint64_t managementSession(){return sessionReady?receiverSession:0;}
 void managementRxAction(){}
 void requestLink(){ManagementData d{};d.kind=3;managementQueue(d);}
-Operational getOperational(){Operational op{};op.role=2;op.prototype=corePrototype;op.display=coreDisplayEnabled;return op;}
+Operational getOperational(){Operational op{};op.role=2;op.prototype=corePrototype;op.display=coreDisplayEnabled;op.uptime=uptimeMs();op.freeHeap=ESP.getFreeHeap();op.rxPackets=rxCount;op.txPackets=coreTxCount;op.errors=authRejects+coreTxErrors;op.ao=lastAO;op.battery=lastBatteryMv;op.doLevel=-1;op.wet=lastRain;op.simulated=simulated;return op;}
 bool applyOperational(const Operational &){return false;}
 
 bool managementCanSend(){return true;}

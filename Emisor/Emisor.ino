@@ -328,7 +328,7 @@ void loop() {
 uint64_t managementSession(){return sessionId;}
 void managementRxAction(){queueState();}
 void requestLink(){queueState();}
-Operational getOperational(){Operational op{};op.sampleMs=testSampleMs;op.confirmMs=confirmMs;op.heartbeatMs=heartbeatMs;op.sleepMs=sleepMs;op.on=rainOnThreshold;op.off=rainOffThreshold;op.prototype=corePrototype;op.display=coreDisplayEnabled;op.doWake=doWakeEnabled;op.role=1;return op;}
+Operational getOperational(){Operational op{};op.sampleMs=testSampleMs;op.confirmMs=confirmMs;op.heartbeatMs=heartbeatMs;op.sleepMs=sleepMs;op.on=rainOnThreshold;op.off=rainOffThreshold;op.prototype=corePrototype;op.display=coreDisplayEnabled;op.doWake=doWakeEnabled;op.role=1;op.uptime=uptimeMs();op.freeHeap=ESP.getFreeHeap();op.ao=analogRain;op.battery=batteryMv;op.doLevel=doLevel;op.wet=wetNow();op.simulated=simulation>=0;op.rxPackets=ackedStates;op.txPackets=coreTxCount;op.errors=authRejects+coreTxErrors;return op;}
 bool applyOperational(const Operational &op){
   if(op.role!=1||op.sampleMs<10||op.sampleMs>60000||op.confirmMs>60000||op.heartbeatMs<1000||op.heartbeatMs>86400000||op.sleepMs<1000||op.sleepMs>86400000||op.on>3900||op.off>4095||op.off<=op.on||op.prototype>1||op.doWake>1)return false;
   // Whole operational update is one NVS entry; loaded atomically after restart.
