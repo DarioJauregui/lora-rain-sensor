@@ -3,7 +3,6 @@
 #include <Controls.h>
 #include <Management.h>
 #include <LittleFS.h>
-#include <RainLog.h>
 #include <esp_sleep.h>
 
 constexpr uint8_t PIN_RAIN_AO=4, PIN_RAIN_DO=2;
@@ -37,13 +36,6 @@ uint32_t recordRows=0;
 String recordError;
 String recordStartIso;
 String commandResult;
-String recordingId,markerObservation,markerId;
-uint64_t recordEpochMs=0,packetGeneratedAt=0,recordAirBase=0,recordWaitBase=0;
-uint64_t outageSince=0,lastOutageMs=0;
-bool recordLinkWasGood=false,recordHadLink=false;
-String csvCell(String v){v.replace("\"","\"\"");return "\""+v+"\"";}
-String logTimestamp(uint64_t elapsed){char out[32];rainlog::utc(recordEpochMs+elapsed,out,sizeof(out));return out;}
-
 constexpr size_t RECORD_LIMIT=1024*1024;
 
 void IRAM_ATTR onRadioReceive() { rxInterrupt=true; }
@@ -80,13 +72,7 @@ void recordEvent(const char *event) {
     String(coreTxCount)+","+String(ackedStates)+","+String(retries)+","+String(ackTimeouts)+","+String(lastRtt)+","+
     String(rxKnown)+","+String(receiver.flags)+","+u64(receiver.remainingMs)+","+String(rainEvent.id)+","+String(rainEvent.pending)+","+
     String(coreAirtime.used)+","+u64(coreDutyWaitMs())+","+String(remoteRssi,1)+","+String(remoteSnr,1)+","+
-    u64(receiver.pulseMs)+","+String(receiver.config)+","+String(lastAck?linkOk():false)+","+String(coreMaintenance)+","+
-    logTimestamp(recordElapsed)+",,,,,,,,,,"+recordingId+","+String(pendingFrame.seq)+","+String(receiver.ackSeq)+","+u64(sessionId)+","+String(attempts)+","+
-    String(String(event)=="ack"?"confirmed":String(event)=="ack_timeout"?"expired":String(event)=="tx"?(attempts>1?"retried":"pending"):"snapshot")+","+
-    (String(event)=="ack"?u64(lastRtt):String(""))+","+(lastAck?u64(now-lastAck):String(""))+","+
-    u64(outageSince?now-outageSince:0)+","+u64(lastOutageMs)+","+u64(coreTotalAirtimeMs-recordAirBase)+","+u64(coreTotalDutyWaitMs-recordWaitBase)+","+
-    (packetGeneratedAt>=recordStarted?u64(packetGeneratedAt-recordStarted):String(""))+","+(String(event)=="ack"?u64(recordElapsed):String(""))+","+
-    csvCell(markerId)+","+csvCell(markerObservation)+","+String(remoteRssi,1)+","+String(remoteSnr,1)+","+String(lastRssi,1)+","+String(lastSnr,1)+"\n";
+    u64(receiver.pulseMs)+","+String(receiver.config)+","+String(lastAck?linkOk():false)+","+String(coreMaintenance)+"\n";
   if(recordFile.size()+line.length()>RECORD_LIMIT) {
     recordError="Memoria de grabacion llena";recordFile.flush();recordFile.close();recording=false;return;
   }
@@ -126,7 +112,6 @@ void loadSettings() {
 void queueState() {
   // Do not mutate an in-flight packet. The current state is queued after its ACK.
   if(pending || awaitingAck)return;
-  packetGeneratedAt=uptimeMs();
   pendingFrame=newFrame(FRAME_STATE,TX_ID,senderBoot,++txSequence,sessionId);
   pendingFrame.wet=wetNow();pendingFrame.ao=analogRain;pendingFrame.batteryMv=batteryMv;
   pendingFrame.event=rainEvent.pending?rainEvent.id:0;
@@ -164,10 +149,6 @@ String roleControlsHtml() {
     "<details><summary>Preparar memoria de grabación</summary><form action='/record/prepare' data-save>"
     "<p class='hint'>Solo si aparece memoria no preparada. Formatear elimina cualquier grabación de esta partición. "
     "No cambia la configuración ni la clave.</p><label>Escribe BORRAR MEMORIA<input name='confirm' required></label><button>Preparar memoria</button></form></details>");
-  s+=F("<section><h2>Prueba de cobertura</h2><p class='hint'>GPS del móvil, separado de la Heltec. Prepara la app HTTPS con Internet antes del recorrido; luego puede trabajar sin conexión mientras está abierta. No se solicita GPS en este portal HTTP.</p>"
-    "<button id='gpsReference'>Abrir GPS / sincronizar referencia</button><a id='gpsApp' class='button' href='https://dariojauregui.github.io/lora-rain-sensor/' target='_blank' rel='noopener'>App GPS</a>"
-    "<p id='gpsStatus' role='status'>Ubicación: consultar en la app GPS complementaria.</p>"
-    "<form action='/record/marker' data-save><label>Observación opcional<input name='observation' maxlength='240'></label><button>Marcar punto</button></form></section>");
   s+=pulseControls();
   s+=F("<details><summary>Sensor y envío</summary><form action='/settings' data-save><div class='grid'>"
     "<label>Mojado si AO ≤<input name='on' type='number' min='0' max='3900' value='3500' required></label>"
@@ -217,26 +198,14 @@ void configureRoleRoutes() {
     if(fsReady){recordError="";recordStartIso="";recordRows=0;recordElapsed=0;}
     web.send(fsReady?200:500,"text/plain",fsReady?"Memoria preparada":"No se pudo preparar la particion LittleFS");
   });
-  web.on("/record/session",HTTP_GET,[](){
-    if(!coreIsAuthenticated())return;
-    web.send(200,"application/json","{\"recording_id\":\""+recordingId+"\",\"start_utc\":\""+recordStartIso+"\",\"elapsed_ms\":\""+u64(recording?uptimeMs()-recordStarted:recordElapsed)+"\",\"recording\":"+String(recording?"true":"false")+"}");
-  });
-  web.on("/record/marker",HTTP_POST,[](){
-    if(!corePostAllowed())return;if(!recording){web.send(409,"text/plain","Inicia una grabacion");return;}
-    markerObservation=web.arg("observation");if(markerObservation.length()>240){web.send(400,"text/plain","Observacion demasiado larga");return;}
-    markerId=u64(random64());recordEvent("marker");markerObservation="";markerId="";web.send(200,"text/plain","Punto registrado en la Heltec");
-  });
   web.on("/record/start",HTTP_POST,[](){
     if(!corePostAllowed())return;if(!fsReady||!corePrototype){web.send(409,"text/plain","Grabacion requiere memoria disponible y modo prototipo");return;}
     if(recording){web.send(409,"text/plain","Ya se esta grabando");return;}
     if(LittleFS.exists("/experiment.csv")&&web.arg("replace")!="1"){web.send(409,"text/plain","Descarga o confirma sustituir la grabacion anterior");return;}
-    String iso=web.arg("start_iso");uint64_t epoch;if(!validIso(iso)||!rainlog::parseUtc(iso.c_str(),epoch)){web.send(400,"text/plain","Fecha de inicio invalida; recarga la interfaz");return;}
+    String iso=web.arg("start_iso");if(!validIso(iso)){web.send(400,"text/plain","Fecha de inicio invalida; recarga la interfaz");return;}
     recordFile=LittleFS.open("/experiment.csv","w");if(!recordFile){web.send(500,"text/plain","No se pudo crear el archivo");return;}
-    recordFile.println("start_utc,elapsed_ms,event,ao,do,wet,simulated,battery_mv,ack_age_ms,rssi_dbm,snr_db,tx_packets,acked_states,retries,ack_timeouts,rtt_ms,rx_known,rx_flags,remaining_ms,event_id,event_pending,airtime_used_ms,duty_wait_ms,rx_rssi_dbm,rx_snr_db,pulse_ms,rx_config,link_ok,maintenance,timestamp_utc,gps_timestamp_utc,gps_age_ms,gps_latitude,gps_longitude,gps_accuracy_m,gps_speed_m_s,gps_heading_deg,gps_altitude_m,gps_source,recording_id,seq,ack_seq,session_id,attempts,exchange_result,event_rtt_ms,remote_measure_age_ms,link_down_ms,last_outage_ms,airtime_total_ms,duty_wait_total_ms,event_generated_elapsed_ms,event_confirmed_elapsed_ms,marker_id,observation,rssi_tx_rx_dbm,snr_tx_rx_db,rssi_rx_tx_dbm,snr_rx_tx_db");
-    recordStartIso=iso;recordEpochMs=epoch;recordingId=u64(random64());
-    recordAirBase=coreTotalAirtimeMs;recordWaitBase=coreTotalDutyWaitMs;
-    recordLinkWasGood=linkOk();recordHadLink=recordLinkWasGood;outageSince=recordLinkWasGood?0:uptimeMs();lastOutageMs=0;
-    recordStarted=uptimeMs();recordRows=0;recordElapsed=0;recordError="";recording=true;recordEvent("record_start");web.send(200,"text/plain","Grabando");
+    recordFile.println("start_utc,elapsed_ms,event,ao,do,wet,simulated,battery_mv,ack_age_ms,rssi_dbm,snr_db,tx_packets,acked_states,retries,ack_timeouts,rtt_ms,rx_known,rx_flags,remaining_ms,event_id,event_pending,airtime_used_ms,duty_wait_ms,rx_rssi_dbm,rx_snr_db,pulse_ms,rx_config,link_ok,maintenance");
+    recordStartIso=iso;recordStarted=uptimeMs();recordRows=0;recordElapsed=0;recordError="";recording=true;recordEvent("record_start");web.send(200,"text/plain","Grabando");
   });
   web.on("/record/stop",HTTP_POST,[](){if(!corePostAllowed())return;if(recording){recordEvent("record_stop");recordFile.close();recording=false;}web.send(200,"text/plain","Grabacion detenida");});
   web.on("/record.csv",HTTP_GET,[](){
@@ -333,7 +302,7 @@ void setup() {
   if(!resumed)coreStartPortal(false);if(sessionId)queueState();nextSend=uptimeMs();
 }
 void loop() {
-  coreTickRadioStats();coreTickPortal();coreTickDisplay(false);processReceived();managementTick();
+  coreTickPortal();coreTickDisplay(false);processReceived();managementTick();
   static bool previousPrototype=corePrototype;
   if(previousPrototype&&!corePrototype){bool old=wetNow();simulation=-1;if(!old&&wetNow())latchRainEvent();
     if(recording){recordEvent("record_stop_mode");recordFile.close();recording=false;}queueState();}
@@ -341,10 +310,6 @@ void loop() {
   if(!coreMaintenance)updateSensor();serviceRadio();
   uint64_t now=uptimeMs();static uint64_t lastBattery=0;
   if(!coreMaintenance&&now-lastBattery>=30000){lastBattery=now;readBattery();}
-  if(recording){bool good=linkOk();if(good!=recordLinkWasGood){
-    if(good){lastOutageMs=outageSince?now-outageSince:0;outageSince=0;recordEvent(recordHadLink?"link_recovered":"link_acquired");recordHadLink=true;}
-    else{outageSince=now;recordEvent("link_lost");}recordLinkWasGood=good;
-  }}
   if(recording&&now-lastRecordSnapshot>=1000){lastRecordSnapshot=now;recordEvent("sample");}
   if(now-lastScreen>=1000){lastScreen=now;coreQuality=rain::quality(lastRssi,lastSnr,linkOk(),ackedStates,sentStates);
     if(coreApActive&&now<30000)coreDisplayPortalIfNeeded();else coreScreen("LoraRainSensor TX",wetNow()?"MOJADO":"SECO",simulation>=0?"SIMULACION":"SENSOR",
