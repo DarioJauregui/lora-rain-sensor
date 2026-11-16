@@ -31,16 +31,5 @@ jobs:
       - name: Compile both roles with throwaway keys
         run: |
           python tools/ci_key.py
-          mkdir -p dist
-          arduino-cli compile --fqbn esp32:esp32:heltec_wifi_lora_32_V3 --libraries libraries --output-dir /tmp/rain-emisor Emisor
-          arduino-cli compile --fqbn esp32:esp32:heltec_wifi_lora_32_V3 --libraries libraries --output-dir /tmp/rain-receptor Receptor
-          cp /tmp/rain-emisor/Emisor.ino.bin dist/Emisor.ino.bin
-          cp /tmp/rain-receptor/Receptor.ino.bin dist/Receptor.ino.bin
-          sha256sum dist/*.bin
-      - name: Publish temporary OTA files for bench tests
-        uses: actions/upload-artifact@v4
-        with:
-          name: RainLink-1.1.0-prototype-TEST-ONLY
-          path: dist/*.bin
-          if-no-files-found: error
-          retention-days: 1
+          arduino-cli compile --fqbn esp32:esp32:heltec_wifi_lora_32_V3 --libraries libraries Emisor
+          arduino-cli compile --fqbn esp32:esp32:heltec_wifi_lora_32_V3 --libraries libraries Receptor
