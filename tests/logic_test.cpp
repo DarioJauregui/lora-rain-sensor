@@ -3,6 +3,10 @@
 #include <iostream>
 
 int main() {
+  assert(!rain::contactClosed(false,false));assert(rain::contactClosed(false,true));
+  assert(rain::contactClosed(true,false));assert(!rain::contactClosed(true,true));
+  assert(rain::quality(-80,10,false,10,10)==-1);
+  assert(rain::quality(-80,10,true,10,10)>rain::quality(-120,-10,true,2,10));
   uint64_t n;
   assert(rain::decimal("18446744073709551615", n) && n == UINT64_MAX);
   assert(!rain::decimal("18446744073709551616", n));

@@ -9,6 +9,8 @@
 #include <Update.h>
 #include <Preferences.h>
 #include <mbedtls/md.h>
+#include <mbedtls/gcm.h>
+#include <mbedtls/hkdf.h>
 #include <esp_ota_ops.h>
 #include <esp_system.h>
 #include <stddef.h>
@@ -19,9 +21,9 @@
 #include "Portal.h"
 
 // Version shared by the two devices; Arduino-ESP32 core 3.3.2, RadioLib 7.8.1.
-static const char *FW_VERSION = "1.1.0-prototype";
+static const char *FW_VERSION = "1.2.0-prototype";
 static const uint32_t PROTOCOL_MAGIC = 0x52414E39UL;
-static const uint8_t PROTOCOL_VERSION = 2;
+static const uint8_t PROTOCOL_VERSION = 3;
 static const uint32_t TX_ID = 0x54583031UL;
 static const uint32_t RX_ID = 0x52583031UL;
 static const uint8_t FRAME_HELLO = 1;
@@ -40,7 +42,8 @@ static const uint8_t ACK_RELAY_ARMED = 0x02;
 
 // Clave HMAC: archivo privado local, no versionado.
 // PAIR_KEY is supplied by the sketch before including this header.
-static_assert(sizeof(PAIR_KEY)==32,"PAIR_KEY must contain 32 bytes");
+uint8_t PAIR_KEY[32]{};
+bool corePaired=false;
 
 // Verified Heltec WiFi LoRa 32 V3 pins.
 static constexpr uint8_t RADIO_NSS = 8;
@@ -85,9 +88,10 @@ struct __attribute__((packed)) RainFrame {
   uint32_t config;
   int16_t peerRssi10;
   int16_t peerSnr10;
+  uint8_t payload[128];
   uint8_t tag[16];
 };
-static_assert(sizeof(RainFrame) == 88, "Protocol layout changed");
+static_assert(sizeof(RainFrame) == 216, "Protocol layout changed");
 
 SX1262 radio = new Module(RADIO_NSS, RADIO_DIO1, RADIO_RST, RADIO_BUSY);
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C oled(U8G2_R0, OLED_RST, OLED_SCL, OLED_SDA);
@@ -126,12 +130,18 @@ String getStatusJson();
 String roleControlsHtml();
 void configureRoleRoutes();
 void beforeOta();
+void managementRoutes();
+void managementTick();
+void requestLink();
+int coreQuality=-1;
+String coreTimer;
 void coreSaveDevice() {
   Preferences p; p.begin("raindevice", false);
   p.putBool("prototype", corePrototype); p.putBool("display", coreDisplayEnabled); p.end();
 }
 void coreLoadDevice() {
   Preferences p; p.begin("raindevice", true);
+  p.getBytes("key",PAIR_KEY,32); corePaired=p.getBytesLength("key")==32;
   corePrototype=p.getBool("prototype",true); coreDisplayEnabled=p.getBool("display",true); p.end();
 }
 bool corePostAllowed() {
@@ -160,6 +170,7 @@ void signFrame(RainFrame &f) {
 }
 
 bool validFrame(const RainFrame &f) {
+  if (!corePaired) return false;
   if (f.magic != PROTOCOL_MAGIC || f.version != PROTOCOL_VERSION) return false;
   RainFrame check = f;
   signFrame(check);
@@ -205,6 +216,7 @@ bool initRadio(void (*onRx)(void)) {
 }
 
 int16_t transmitFrame(RainFrame &f, void (*onRx)(void)) {
+  if (!corePaired) return -32001;
   if (!coreAirtime.spend(rtcTimeMs(), coreFrameAirtimeMs)) {
     ++coreDutyDeferrals; return -32000;
   }
@@ -222,7 +234,7 @@ int16_t transmitFrame(RainFrame &f, void (*onRx)(void)) {
 bool readFrame(RainFrame &f) {
   size_t length = radio.getPacketLength();
   if (length != sizeof(RainFrame)) {
-    uint8_t discard[128];
+    uint8_t discard[255];
     if (length && length <= sizeof(discard)) radio.readData(discard, length);
     else radio.standby();
     return false;
@@ -246,8 +258,11 @@ void coreScreen(const String &line1, const String &line2,
   oled.setFont(u8g2_font_6x10_tf);
   const String lines[] = {line1, line2, line3, line4, line5, line6};
   for (uint8_t i = 0; i < 6; ++i) {
-    oled.drawUTF8(0, 10 + 10 * i, lines[i].substring(0, 21).c_str());
+    if(i<4)oled.drawUTF8(0,10+10*i,lines[i].substring(0,21).c_str());
   }
+  oled.setFont(u8g2_font_6x10_tf);oled.drawUTF8(0,62,coreTimer.substring(0,10).c_str());
+  String quality=coreQuality<0?"--%":String(coreQuality)+"%";
+  oled.setFont(u8g2_font_logisoso16_tf);oled.drawStr(128-oled.getStrWidth(quality.c_str()),63,quality.c_str());
   oled.sendBuffer();
 }
 
@@ -261,7 +276,7 @@ void coreInitDisplay() {
   coreOledReady = true;
   coreWakeDisplay(120000);
   if (!coreDisplayEnabled) oled.setPowerSave(1);
-  coreScreen("LLUVIA / " + coreRole, "Iniciando...", "", "", "", "");
+  coreScreen("LoraRainSensor " + coreRole, "Iniciando...", "", "", "", "");
 }
 
 String coreGeneratePassword() {
@@ -342,6 +357,7 @@ void coreHandleUpload() {
 }
 
 void coreConfigureWeb() {
+  managementRoutes();
   web.on("/device", HTTP_POST, []() {
     if (!corePostAllowed()) return;
     if (web.arg("mode")!="prototype" && web.arg("mode")!="production") { web.send(400,"text/plain","Modo invalido"); return; }
@@ -369,7 +385,8 @@ void coreConfigureWeb() {
     web.send(200, "application/json", getStatusJson());
   });
   web.on("/update", HTTP_POST, []() {
-    if (!coreOtaAuthenticated) {
+    if (!coreIsAuthenticated()) return;
+    if (web.arg("token")!=coreCsrfToken || !coreOtaAuthenticated) {
       web.send(403, "text/plain", "OTA denied");
       return;
     }
@@ -400,7 +417,13 @@ void coreStartPortal(bool permanent) {
 
   char suffix[10];
   snprintf(suffix, sizeof(suffix), "%04lX", (unsigned long)(ESP.getEfuseMac() & 0xFFFFUL));
-  coreApSsid = "LLUVIA-" + coreRole + "-" + suffix;
+  p.begin("rainaccess",true);coreApSsid=p.getString("ssid", "LoraRainSensor-" + coreRole + "-" + suffix);
+  struct Access {char ssid[33];char pass[64];} access{};
+  bool loaded=p.getBytes("access",&access,sizeof(access))==sizeof(access);p.end();
+  if(loaded){access.ssid[32]=0;access.pass[63]=0;coreApSsid=access.ssid;coreApPassword=access.pass;}memset(&access,0,sizeof(access));
+  pinMode(0,INPUT_PULLUP);
+  if(digitalRead(0)==LOW){delay(5000);if(digitalRead(0)==LOW){Preferences recovery;recovery.begin("rainaccess",false);recovery.clear();recovery.end();
+    coreApPassword=coreGeneratePassword();recovery.begin("rainwifi",false);recovery.putString("password",coreApPassword);recovery.end();coreApSsid="LoraRainSensor-"+coreRole+"-"+suffix;}}
   coreCsrfToken = coreGenerateCsrf();
   if (!WiFi.softAP(coreApSsid.c_str(), coreApPassword.c_str(), 6, false, 1)) {
     Serial.println("WIFI AP ERROR");
@@ -414,8 +437,7 @@ void coreStartPortal(bool permanent) {
   web.begin();
   coreApActive = true;
   coreApStartMs = millis();
-  Serial.printf("Portal: SSID=%s PASS=%s IP=%s\n", coreApSsid.c_str(),
-                coreApPassword.c_str(), WiFi.softAPIP().toString().c_str());
+  Serial.printf("Portal: SSID=%s IP=%s\n", coreApSsid.c_str(), WiFi.softAPIP().toString().c_str());
   coreWakeDisplay(permanent ? 30000 : PORTAL_WINDOW_MS);
 }
 
@@ -449,12 +471,13 @@ void coreTickDisplay(bool onMains) {
 
 void coreDisplayPortalIfNeeded() {
   if (!coreApActive || !coreOledOn || coreOtaInProgress) return;
-  coreScreen("CONFIG WIFI / " + coreRole, coreApSsid, "Clave:", coreApPassword,
+  coreScreen("LoraRainSensor " + coreRole, coreApSsid, "Clave:", coreApPassword,
              "192.168.4.1", (corePrototype || coreApPermanent) ? "Portal activo" : "Temporal: 3 min");
 }
 
+String managementStatus();
 String coreStatusFields() {
-  return ",\"prototype\":" + String(corePrototype?"true":"false") +
+  return ",\"quality_pct\":"+String(coreQuality)+managementStatus() + ",\"prototype\":" + String(corePrototype?"true":"false") +
     ",\"display_enabled\":" + String(coreDisplayEnabled?"true":"false") +
     ",\"maintenance\":" + String(coreMaintenance?"true":"false") +
     ",\"uptime_ms\":\"" + u64(uptimeMs()) + "\"" +

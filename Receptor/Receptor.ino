@@ -1,11 +1,16 @@
 #include <Arduino.h>
-#include "pair_key.h"
 #include <RainCore.h>
 #include <Controls.h>
+#include <Management.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
 
+#ifndef RAIN_CONTACT_NC
+#define RAIN_CONTACT_NC 0
+#endif
+static_assert(RAIN_CONTACT_NC==0||RAIN_CONTACT_NC==1,"Contact must be NO (0) or NC (1)");
+constexpr bool CONTACT_NC=RAIN_CONTACT_NC;
 constexpr uint8_t PIN_RELAY_NPN=5;
 SemaphoreHandle_t controlMutex=nullptr;
 struct ControlGuard {
@@ -100,14 +105,14 @@ void configureRoleRoutes(){
   web.on("/reset-activation",HTTP_POST,[](){if(!corePostAllowed())return;
     bool ok=configureReceiver(0,0,0,true);web.send(ok?200:409,"text/plain",ok?"Activacion rearmada":"Rearme bloqueado: requiere sensor seco, enlace vigente y memoria disponible");});
 }
-uint32_t configWord(){return (controlArmed?1:0)|(pulse.policy<<1)|(lossPolicy<<3)|(pulse.restored?32:0)|(activeCoil?64:0);}
+uint32_t configWord(){return (controlArmed?1:0)|(pulse.policy<<1)|(lossPolicy<<3)|(pulse.restored?32:0)|(activeCoil?64:0)|(CONTACT_NC?128:0);}
 String getStatusJson(){
   ControlGuard lock;
   return "{\"role\":\"RX\",\"version\":\""+String(FW_VERSION)+"\",\"wet\":"+String(lastRain?"true":"false")+
     ",\"simulated\":"+String(simulated?"true":"false")+",\"ao\":"+String(lastAO)+",\"battery_mv\":"+String(lastBatteryMv)+
     ",\"link_ok\":"+String(haveState&&!commsLost?"true":"false")+",\"ack_age_ms\":"+(haveState?u64(uptimeMs()-lastFresh):String("null"))+
     ",\"rssi_dbm\":"+String(lastRssi,1)+",\"snr_db\":"+String(lastSnr,1)+",\"rx_known\":true,\"rx_armed\":"+String(controlArmed?"true":"false")+
-    ",\"rx_coil\":"+String(coilOn?"true":"false")+",\"rx_active\":"+String(relayActive()?"true":"false")+
+    ",\"contact_nc\":"+String(CONTACT_NC?"true":"false")+",\"rx_coil\":"+String(coilOn?"true":"false")+",\"rx_active\":"+String(relayActive()?"true":"false")+
     ",\"rx_restored\":"+String(pulse.restored?"true":"false")+",\"rx_maintenance\":"+String(coreMaintenance?"true":"false")+
     ",\"remaining_ms\":\""+u64(pulse.remaining(uptimeMs()))+"\",\"pulse_ms\":\""+u64(pulse.durationMs)+"\""+
     ",\"policy\":"+String(pulse.policy)+",\"loss\":"+String(lossPolicy)+",\"polarity\":"+String(activeCoil?1:0)+",\"loss_seconds\":"+u64(lossTimeoutMs/1000)+
@@ -129,6 +134,7 @@ void sendAck(uint32_t seq,bool config=false,bool rejected=false){
 void processReceived(){
   if(!rxInterrupt)return;rxInterrupt=false;RainFrame f{};
   if(!readFrame(f)){++authRejects;radio.startReceive();return;}
+  if(managementProcess(f)){radio.startReceive();return;}
   if(f.sender!=TX_ID){radio.startReceive();return;}
   if(f.type==FRAME_HELLO&&f.session){
     // Fresh unpredictable challenge authenticates states; boot counters need not survive a flash erase.
@@ -149,7 +155,7 @@ void processReceived(){
   }
   if(f.type!=FRAME_STATE||f.wet>1){radio.startReceive();return;}
   {ControlGuard lock;
-    highestSeq=f.seq;lastFresh=uptimeMs();haveState=true;commsLost=false;lastRain=f.wet;simulated=f.flags&STATE_SIMULATED;
+    highestSeq=f.seq;lastFresh=uptimeMs();mgLastReply=lastFresh;mgPeerAsleep=f.flags&4;haveState=true;commsLost=false;lastRain=f.wet;simulated=f.flags&STATE_SIMULATED;
     lastAO=f.ao;lastBatteryMv=f.batteryMv;lastRssi=radio.getRSSI();lastSnr=radio.getSNR();++rxCount;
     bool event=f.event&&f.event!=lastEvent;bool wasActive=pulse.active;
     pulse.observe(lastRain,event,lastFresh);pulse.tick(lastFresh,true);if(event){lastEvent=f.event;persistDirty=true;}
@@ -163,17 +169,25 @@ void setup(){
   Serial.begin(115200);coreRole="RX";coreLoadDevice();loadSettings();
   controlMutex=xSemaphoreCreateMutex();if(!controlMutex)while(true)delay(1000);
   if(xTaskCreate(controlTask,"relay",4096,nullptr,2,nullptr)!=pdPASS){coreMaintenance=true;while(true)delay(1000);}
-  coreInitDisplay();ownBoot=esp_random();
+  coreInitDisplay();ownBoot=esp_random();managementOwnBoot=ownBoot;managementOnRx=onRadioReceive;
   if(!initRadio(onRadioReceive)){coreScreen("ERROR RADIO","Salida deshabilitada","","","","");coreMaintenance=true;while(true)delay(1000);}
   coreStartPortal(false);
 }
 void loop(){
-  coreTickPortal();processReceived();
+  coreTickPortal();processReceived();managementTick();
   if(persistDirty&&!persistSettings()){coreMaintenance=true;ControlGuard lock;setPhysicalCoil(false);}
   static uint64_t lastScreen=0;uint64_t now=uptimeMs();
   if(now-lastScreen>=1000){lastScreen=now;
     if(coreApActive&&now<30000)coreDisplayPortalIfNeeded();else {
-      ControlGuard lock;coreScreen("RAIN LINK / RX",pulse.active?"RELE ACTIVO":"RELE INACTIVO",lastRain?"MOJADO":"SECO",commsLost?"SIN ENLACE":"ENLACE OK",
+      ControlGuard lock;coreQuality=rain::quality(lastRssi,lastSnr,!commsLost,rxCount,rxCount);coreTimer=pulse.active?String((unsigned long)(pulse.remaining(now)/1000))+"s":"";coreScreen("LoraRainSensor RX",rain::contactClosed(CONTACT_NC,coilOn)?"RELE CERRADO":"RELE ABIERTO",lastRain?"MOJADO":"SECO",commsLost?"SIN ENLACE":"ENLACE OK",
         "BOBINA "+String(coilOn?"ON":"OFF"),controlArmed?"ARMADO":"DESARMADO");}}
   delay(1);
 }
+
+uint64_t managementSession(){return sessionReady?receiverSession:0;}
+void managementRxAction(){}
+void requestLink(){ManagementData d{};d.kind=3;managementQueue(d);}
+Operational getOperational(){Operational op{};op.role=2;op.prototype=corePrototype;op.display=coreDisplayEnabled;return op;}
+bool applyOperational(const Operational &){return false;}
+
+bool managementCanSend(){return true;}

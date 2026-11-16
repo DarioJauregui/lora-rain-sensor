@@ -10,12 +10,12 @@ const element=id=>{
 };
 let role='TX', posted=[];
 const ctx=vm.createContext({console,URLSearchParams,Date,BigInt,setInterval(){},confirm:()=>true,
-  document:{getElementById:element,querySelector:s=>s==='main'?{dataset:{role}}:{elements:{mode:{},display:{}}},
+  document:{getElementById:id=>id==='theme'?null:element(id),querySelector:s=>s==='main'?{dataset:{role}}:{elements:{mode:{},display:{}}},
     querySelectorAll:()=>[],createElement:()=>({append(){}})},
   fetch:async(path,opts)=>{if(opts)posted.push([path,opts.body]);return {ok:true,json:async()=>fixture,text:async()=>'OK'};}
 });
 const fixture={prototype:true,display_enabled:true,link_ok:true,ack_age_ms:100,wet:true,simulated:true,
-  rx_known:true,rx_armed:true,rx_coil:false,remaining_ms:'18446744073709551615',pulse_ms:'18446744073709551615',
+  rx_known:true,rx_armed:true,rx_coil:false,contact_nc:true,quality_pct:72,remaining_ms:'18446744073709551615',pulse_ms:'18446744073709551615',
   rssi_dbm:-110,snr_db:-4,duty_wait_ms:'0',sf:9,frequency_mhz:868.3,airtime_ms:520,
   recording:false,record_rows:10,record_elapsed_ms:'1234'};
 vm.runInContext(js,ctx);

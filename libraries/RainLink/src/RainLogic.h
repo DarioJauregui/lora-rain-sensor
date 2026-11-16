@@ -4,6 +4,18 @@
 #include <limits.h>
 
 namespace rain {
+inline bool contactClosed(bool nc,bool coil){return nc?!coil:coil;}
+inline int quality(float rssi,float snr,bool fresh,uint32_t confirmed,uint32_t sent){
+  if(!fresh)return -1;
+  float r=(rssi+125)*100/60, n=(snr+12)*100/22;
+  if(r<0)r=0;
+  if(r>100)r=100;
+  if(n<0)n=0;
+  if(n>100)n=100;
+  float delivery=sent?100.0f*confirmed/sent:100;if(delivery>100)delivery=100;
+  return int(0.35f*r+0.25f*n+0.40f*delivery+0.5f);
+}
+
 inline bool decimal(const char *s, uint64_t &v) {
   if (!s || !*s) return false;
   v = 0;
