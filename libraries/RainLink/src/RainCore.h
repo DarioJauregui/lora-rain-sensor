@@ -424,8 +424,6 @@ void coreStartPortal(bool permanent) {
   bool loaded=p.getBytes("access",&access,sizeof(access))==sizeof(access);p.end();
   if(loaded){access.ssid[32]=0;access.pass[63]=0;coreApSsid=access.ssid;coreApPassword=access.pass;}memset(&access,0,sizeof(access));
   pinMode(0,INPUT_PULLUP);
-  if(digitalRead(0)==LOW){delay(5000);if(digitalRead(0)==LOW){Preferences recovery;recovery.begin("rainaccess",false);recovery.clear();recovery.end();
-    coreApPassword=coreGeneratePassword();recovery.begin("rainwifi",false);recovery.putString("password",coreApPassword);recovery.end();coreApSsid="LoraRainSensor-"+coreRole+"-"+suffix;}}
   coreCsrfToken = coreGenerateCsrf();
   if (!WiFi.softAP(coreApSsid.c_str(), coreApPassword.c_str(), 6, false, 1)) {
     Serial.println("WIFI AP ERROR");
@@ -453,6 +451,16 @@ void coreStopPortal() {
 }
 
 void coreTickPortal() {
+  static uint32_t recoveryHeld=0;
+  if(!coreOtaInProgress&&digitalRead(0)==LOW){
+    if(!recoveryHeld)recoveryHeld=millis();
+    if(millis()-recoveryHeld>=5000){
+      Preferences recovery;recovery.begin("rainaccess",false);recovery.clear();recovery.end();
+      recovery.begin("rainwifi",false);recovery.remove("password");recovery.end();
+      coreDisplayEnabled=true;coreSaveDevice();coreRebootAtMs=millis()+300;recoveryHeld=millis();
+    }
+  }else recoveryHeld=0;
+
   if(coreRebootAtMs && (int32_t)(millis()-coreRebootAtMs)>=0 && !coreOtaInProgress)ESP.restart();
   if (!coreApActive) return;
   web.handleClient();
