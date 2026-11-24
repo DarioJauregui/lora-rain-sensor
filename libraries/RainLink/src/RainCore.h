@@ -114,6 +114,8 @@ uint32_t coreFrameAirtimeMs = 650;
 uint32_t coreRadioRecoveries=0, coreRadioRecoveryFailures=0;
 uint64_t coreLastRadioRecoveryMs=0;
 bool coreLogReady=false;
+bool coreUtcAvailable=false;
+int64_t coreUtcOffsetMs=0;
 uint8_t coreLogSlot=0;
 static constexpr size_t CORE_LOG_SEGMENT_LIMIT=16384;
 const char *coreLogPath(uint8_t slot){return slot?"/diag1.csv":"/diag0.csv";}
@@ -125,7 +127,7 @@ void coreInitLog(bool filesystemMounted=false){
 void coreLogEvent(const char *event,int32_t value=0){
   if(!coreLogReady||!event)return;
   if(!strcmp(event,"sample")||!strcmp(event,"tx")||!strcmp(event,"ack")||!strcmp(event,"radio_ok"))return;
-  uint64_t utc=rtcTimeMs();if(utc<1577836800000ULL)utc=0;
+  uint64_t utc=coreUtcAvailable?(uint64_t)(coreUtcOffsetMs+(int64_t)uptimeMs()):0;
   String row=(utc?u64(utc):String(""))+","+u64(uptimeMs())+","+coreRole+","+event+","+String(value)+"\n";
   File f=LittleFS.open(coreLogPath(coreLogSlot),"a");
   if(!f)return;
@@ -430,9 +432,10 @@ void coreConfigureWeb() {
   web.on("/time",HTTP_POST,[](){
     if(!corePostAllowed())return;uint64_t epoch;
     if(!readUnsigned("epoch_ms",epoch)||epoch<1577836800000ULL||epoch>4102444800000ULL){web.send(400,"text/plain","Marca temporal UTC invalida");return;}
-    timeval tv{};tv.tv_sec=epoch/1000;tv.tv_usec=(epoch%1000)*1000;
-    if(settimeofday(&tv,nullptr)!=0){web.send(500,"text/plain","No se pudo sincronizar");return;}
-    web.send(200,"text/plain","Hora sincronizada");
+    // Keep the radio airtime accounting clock untouched. UTC is an independent log offset.
+    coreUtcOffsetMs=(int64_t)epoch-(int64_t)uptimeMs();
+    coreUtcAvailable=true;
+    web.send(200,"text/plain","Hora sincronizada para registro");
   });
   web.on("/logs.csv",HTTP_GET,[](){
     if(!coreIsAuthenticated())return;
