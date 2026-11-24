@@ -11,7 +11,16 @@
 #endif
 static_assert(RAIN_CONTACT_NC==0||RAIN_CONTACT_NC==1,"Contact must be NO (0) or NC (1)");
 constexpr bool CONTACT_NC=RAIN_CONTACT_NC;
-constexpr uint8_t PIN_RELAY_NPN=5;
+// Match this compile-time pin to the physically wired control input.
+#ifndef RAIN_RELAY_GPIO
+#define RAIN_RELAY_GPIO 5
+#endif
+#ifndef RAIN_RELAY_ACTIVE_HIGH
+#define RAIN_RELAY_ACTIVE_HIGH 1
+#endif
+static_assert(RAIN_RELAY_GPIO>=0&&RAIN_RELAY_GPIO<=48,"Relay GPIO invalid");
+static_assert(RAIN_RELAY_ACTIVE_HIGH==0||RAIN_RELAY_ACTIVE_HIGH==1,"Relay output polarity invalid");
+constexpr uint8_t PIN_RELAY_NPN=RAIN_RELAY_GPIO;
 SemaphoreHandle_t controlMutex=nullptr;
 struct ControlGuard {
   ControlGuard(){xSemaphoreTake(controlMutex,portMAX_DELAY);}
@@ -23,6 +32,7 @@ bool sessionReady=false, commsLost=true;
 std::atomic<bool> persistDirty{false};
 uint8_t lossPolicy=rain::HOLD_OUTPUT;
 uint64_t lossTimeoutMs=180000, lastFresh=0, receiverSession=0, senderNonce=0;
+uint64_t relayStateSinceMs=0, wetStateSinceMs=0;
 uint32_t ownBoot=0, senderBoot=0, ownSeq=0, highestSeq=0, lastEvent=0;
 uint32_t rxCount=0, duplicates=0, authRejects=0;
 uint16_t lastAO=0, lastBatteryMv=0;
@@ -31,7 +41,7 @@ volatile bool rxInterrupt=false;
 
 void IRAM_ATTR onRadioReceive(){rxInterrupt=true;}
 void recordEvent(const char *event){Serial.printf("%llu %s\n",(unsigned long long)uptimeMs(),event);}
-void setPhysicalCoil(bool on){coilOn=on;digitalWrite(PIN_RELAY_NPN,on?HIGH:LOW);}
+void setPhysicalCoil(bool on){if(coilOn!=on)relayStateSinceMs=uptimeMs();coilOn=on;digitalWrite(PIN_RELAY_NPN,(on==bool(RAIN_RELAY_ACTIVE_HIGH))?HIGH:LOW);}
 // Caller holds controlMutex. All paths, including web and OTA, share this gate.
 void applyControl(){
   setPhysicalCoil(rain::outputCoil(coreMaintenance,controlArmed,haveState,commsLost,
@@ -109,7 +119,8 @@ uint32_t configWord(){return (controlArmed?1:0)|(pulse.policy<<1)|(lossPolicy<<3
 String getStatusJson(){
   ControlGuard lock;
   return "{\"role\":\"RX\",\"version\":\""+String(FW_VERSION)+"\",\"wet\":"+String(lastRain?"true":"false")+
-    ",\"simulated\":"+String(simulated?"true":"false")+",\"ao\":"+String(lastAO)+",\"battery_mv\":"+String(lastBatteryMv)+
+    ",\"simulated\":"+String(simulated?"true":"false")+",\"wet_state_age_ms\":\""+u64(wetStateSinceMs?uptimeMs()-wetStateSinceMs:0)+"\""+
+    ",\"relay_state_age_ms\":\""+u64(relayStateSinceMs?uptimeMs()-relayStateSinceMs:0)+"\""+",\"relay_pin\":"+String(PIN_RELAY_NPN)+",\"ao\":"+String(lastAO)+",\"battery_mv\":"+String(lastBatteryMv)+
     ",\"link_ok\":"+String(haveState&&!commsLost?"true":"false")+",\"ack_age_ms\":"+(haveState?u64(uptimeMs()-lastFresh):String("null"))+
     ",\"rssi_dbm\":"+String(lastRssi,1)+",\"snr_db\":"+String(lastSnr,1)+",\"rx_known\":true,\"rx_armed\":"+String(controlArmed?"true":"false")+
     ",\"contact_nc\":"+String(CONTACT_NC?"true":"false")+",\"rx_coil\":"+String(coilOn?"true":"false")+",\"rx_active\":"+String(relayActive()?"true":"false")+
@@ -125,7 +136,7 @@ void sendChallenge(){
 }
 void sendAck(uint32_t seq,bool config=false,bool rejected=false){
   auto f=newFrame(FRAME_ACK,RX_ID,ownBoot,++ownSeq,receiverSession);f.ackSeq=seq;
-  {ControlGuard lock;f.event=lastEvent;f.config=configWord();f.pulseMs=pulse.durationMs;f.remainingMs=pulse.remaining(uptimeMs());f.echo=lossTimeoutMs;
+  {ControlGuard lock;f.wet=lastRain?1:0;f.event=lastEvent;f.config=configWord();f.pulseMs=pulse.durationMs;f.remainingMs=pulse.remaining(uptimeMs());f.echo=lossTimeoutMs;
     if(controlArmed)f.flags|=ACK_RELAY_ARMED;if(coilOn)f.flags|=ACK_COIL_ON;if(relayActive())f.flags|=ACK_ACTIVE;
     if(coreMaintenance)f.flags|=ACK_MAINTENANCE;if(config)f.flags|=ACK_CONFIG;if(rejected)f.flags|=ACK_REJECTED;
     f.peerRssi10=roundf(lastRssi*10);f.peerSnr10=roundf(lastSnr*10);}
@@ -155,7 +166,9 @@ void processReceived(){
   }
   if(f.type!=FRAME_STATE||f.wet>1){radio.startReceive();return;}
   {ControlGuard lock;
-    highestSeq=f.seq;lastFresh=uptimeMs();mgLastReply=lastFresh;mgPeerAsleep=f.flags&4;haveState=true;commsLost=false;lastRain=f.wet;simulated=f.flags&STATE_SIMULATED;
+    highestSeq=f.seq;lastFresh=uptimeMs();mgLastReply=lastFresh;mgPeerAsleep=f.flags&4;
+    if(!haveState||lastRain!=(f.wet!=0))wetStateSinceMs=lastFresh;
+    haveState=true;commsLost=false;lastRain=f.wet;simulated=f.flags&STATE_SIMULATED;
     lastAO=f.ao;lastBatteryMv=f.batteryMv;lastRssi=radio.getRSSI();lastSnr=radio.getSNR();++rxCount;
     bool event=f.event&&f.event!=lastEvent;bool wasActive=pulse.active;
     pulse.observe(lastRain,event,lastFresh);pulse.tick(lastFresh,true);if(event){lastEvent=f.event;persistDirty=true;}
@@ -165,7 +178,7 @@ void processReceived(){
   sendAck(f.seq);
 }
 void setup(){
-  digitalWrite(PIN_RELAY_NPN,LOW);pinMode(PIN_RELAY_NPN,OUTPUT);
+  digitalWrite(PIN_RELAY_NPN,RAIN_RELAY_ACTIVE_HIGH?LOW:HIGH);pinMode(PIN_RELAY_NPN,OUTPUT);relayStateSinceMs=uptimeMs();
   Serial.begin(115200);coreRole="RX";coreLoadDevice();loadSettings();
   controlMutex=xSemaphoreCreateMutex();if(!controlMutex)while(true)delay(1000);
   if(xTaskCreate(controlTask,"relay",4096,nullptr,2,nullptr)!=pdPASS){coreMaintenance=true;while(true)delay(1000);}

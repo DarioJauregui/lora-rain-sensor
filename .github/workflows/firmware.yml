@@ -40,6 +40,7 @@ jobs:
           arduino-cli compile --fqbn esp32:esp32:heltec_wifi_lora_32_V3 --libraries libraries --output-dir artifacts/TX Emisor
           arduino-cli compile --fqbn esp32:esp32:heltec_wifi_lora_32_V3 --libraries libraries --output-dir artifacts/RX Receptor
           arduino-cli compile --fqbn esp32:esp32:heltec_wifi_lora_32_V3 --libraries libraries --build-property compiler.cpp.extra_flags=-DRAIN_CONTACT_NC=1 --output-dir artifacts/RX-NC Receptor
+          arduino-cli compile --fqbn esp32:esp32:heltec_wifi_lora_32_V3 --libraries libraries --build-property compiler.cpp.extra_flags=-DRAIN_RELAY_GPIO=2 --output-dir artifacts/RX-GPIO2-NO Receptor
       - name: Publish public development binaries
         if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         env:
@@ -49,6 +50,7 @@ jobs:
           cp artifacts/TX/Emisor.ino.bin artifacts/LoraRainSensor-Emisor.bin
           cp artifacts/RX/Receptor.ino.bin artifacts/LoraRainSensor-Receptor-NO.bin
           cp artifacts/RX-NC/Receptor.ino.bin artifacts/LoraRainSensor-Receptor-NC.bin
+          cp artifacts/RX-GPIO2-NO/Receptor.ino.bin artifacts/LoraRainSensor-Receptor-GPIO2-NO.bin
           sha256sum artifacts/LoraRainSensor-*.bin > artifacts/SHA256SUMS.txt
-          gh release view v1.2.0-prototype || gh release create v1.2.0-prototype --target "${{ github.event.pull_request.head.sha || github.sha }}" --prerelease --title 'LoraRainSensor 1.2.0 prototype' --notes 'Public unpaired application binaries for Heltec V3. Configure the same private LoRa key locally on both devices. Receiver variants NO and NC must match wiring. Development release; hardware acceptance tests pending. Upload these application binaries using OTA or at application offset 0x10000 over USB; keep the default 8 MB partition table.'
-          gh release upload v1.2.0-prototype artifacts/LoraRainSensor-*.bin artifacts/SHA256SUMS.txt --clobber
+          gh release view v1.2.1-prototype || gh release create v1.2.1-prototype --target "${{ github.event.pull_request.head.sha || github.sha }}" --prerelease --title 'LoraRainSensor 1.2.1 prototype' --notes 'Public unpaired application binaries for Heltec V3. Configure the same private LoRa key locally on both devices. Receiver variants NO and NC must match wiring; the GPIO2-NO variant controls the relay data input on GPIO2 (active HIGH). Development release; hardware acceptance tests pending. Upload these application binaries using OTA or at application offset 0x10000 over USB; keep the default 8 MB partition table.'
+          gh release upload v1.2.1-prototype artifacts/LoraRainSensor-*.bin artifacts/SHA256SUMS.txt --clobber

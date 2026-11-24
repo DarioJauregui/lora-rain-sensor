@@ -32,88 +32,165 @@ async function post(path,body={}){
 
 }
 
-let initial=false,lastStatus=null;
-
-function paint(d){
-
-  lastStatus=d;
-
-  const tx=document.querySelector('main').dataset.role==='TX';
-
-  const age=d.ack_age_ms, fresh=d.link_ok===true;
-
-  if($('quality'))$('quality').textContent=d.link_ok&&d.quality_pct>=0?`${d.quality_pct} %`:'--%';
-
-  $('link').textContent=fresh?'Confirmado':age===null?'Sin confirmar':'Sin enlace';
-
-  $('age').textContent=age===null?'Aún sin respuesta':`${(Number(age)/1000).toFixed(1)} s desde la respuesta`;
-
-  $('rain').textContent=d.wet?'Mojado':'Seco';$('source').textContent=d.simulated?'Simulación activa':'Sensor físico';
-
-  const closed=d.contact_nc?!d.rx_coil:!!d.rx_coil;
-
-  $('relay').textContent=(tx&&!d.rx_known)?'Sin datos':closed?'CERRADO':'ABIERTO';
-
-  $('remaining').textContent=d.rx_restored?'Rearme manual pendiente':`${durationText(d.remaining_ms)}${tx?' al recibir ACK':''}`;
-
-  if($('contactInfo'))$('contactInfo').textContent=`Contacto: ${d.contact_nc?'NC':'NO'} · Estado esperado, sin realimentación. Automático: ${d.rx_armed?'habilitado':'deshabilitado'}. Sin energía: ${d.contact_nc?'cerrado':'abierto'}.`;
-
-  $('signal').textContent=age===null?'—':`${d.rssi_dbm} dBm`;$('snr').textContent=age===null?'—':`SNR ${d.snr_db} dB`;
-
-  $('radioNote').textContent=BigInt(d.duty_wait_ms||0)>0?`Radio en espera por tiempo de emisión: ${Math.ceil(Number(d.duty_wait_ms)/1000)} s. Los eventos pendientes se conservan.`:`Radio: SF${d.sf}, ${d.frequency_mhz} MHz · ${d.airtime_ms} ms por trama. Las lecturas cambian con cada intercambio.`;
-
-  if($('sensorLive'))$('sensorLive').textContent=`AO ${d.ao} / 4095 · DO ${d.do??'—'} · ${d.wet?'Mojado':'Seco'}${d.simulated?' (simulación)':''}`;
-
-  if($('remoteState'))$('remoteState').textContent=`${d.management_state||'Sin operaciones'}${d.remote_ssid?' · SSID remoto: '+d.remote_ssid:''}`;
-
-  $('connection').textContent='Wi-Fi conectado · datos actualizados';
-
-  if($('receiverCommand'))$('receiverCommand').textContent=d.config_pending?'Pendiente de confirmar':d.command_result||'';
-
-  if($('recordState')){
-
-    $('recordState').textContent=d.recording?`Grabando · ${durationText(d.record_elapsed_ms)} · ${d.record_rows} filas`:`${d.record_rows} filas · ${d.record_error||'Detenido'}`;
-
-    $('startRecord').disabled=d.recording||d.filesystem_ready===false||!d.prototype;$('stopRecord').disabled=!d.recording;
-
+let initial=false,lastStatus=null,remoteReadRequested=false;
+const main=document.querySelector('main'),connectedRole=main.dataset.role;
+let selectedRole=connectedRole;
+const timeSince=ms=>{
+  if(ms===null||ms===undefined||ms==='')return 'Sin datos';
+  let n=Math.max(0,Math.floor(Number(ms)/1000));
+  if(!Number.isFinite(n))return 'Sin datos';
+  if(n<60)return n+' s';
+  if(n<3600)return Math.floor(n/60)+' min '+n%60+' s';
+  return Math.floor(n/3600)+' h '+Math.floor(n%3600/60)+' min';
+};
+function chooseRole(role){
+  if(role!=='TX'&&role!=='RX')return;
+  selectedRole=role;main.dataset.view=role;
+  for(const [r,id] of [['TX','selectTx'],['RX','selectRx']]){
+    const btn=$(id);if(btn){btn.classList.toggle('active',r===role);btn.setAttribute('aria-pressed',String(r===role));}
+    const target=$('access'+(r==='TX'?'Tx':'Rx'));
+    if(target)target.textContent=r===connectedRole?'● Wi-Fi directo':'↝ Vía LoRa';
   }
-
-  if(!initial){
-
-    const device=document.querySelector('form[action="/device"]');device.elements.mode.value=d.prototype?'prototype':'production';device.elements.display.value=d.display_enabled?'1':'0';
-
-    for(const form of document.querySelectorAll('form[data-save]'))for(const el of form.elements){if(el.name&&d[el.name]!==undefined)el.value=String(d[el.name]);}
-
-    initial=true;
-
+  if($('localSpace'))$('localSpace').hidden=role!==connectedRole;
+  if($('remoteSpace'))$('remoteSpace').hidden=role===connectedRole;
+  if($('viewContext'))$('viewContext').textContent='Configurando '+(role==='TX'?'Emisor':'Receptor')+(role===connectedRole?' · Local':' · Remoto por LoRa');
+  if($('directContext'))$('directContext').textContent='Wi-Fi conectado al '+(connectedRole==='TX'?'Emisor':'Receptor');
+  if(lastStatus)paint(lastStatus);
+  if(role!==connectedRole&&lastStatus?.paired&&!lastStatus.remote_known&&!remoteReadRequested){
+    remoteReadRequested=true;
+    post('/remote-read').then(refresh).catch(e=>{$('remoteState').textContent=e.message;remoteReadRequested=false;});
   }
-
-  if($('theme'))for(const group of document.querySelectorAll('[data-time]')){
-
-    const key=group.dataset.time;if(group.dataset.loaded||d[key]===undefined||(key.startsWith('remote_')&&!d.remote_known))continue;
-
-    let n=BigInt(d[key])*BigInt(group.dataset.unit||1);
-
-    for(const [k,v]of [['h',n/3600000n],['m',n/60000n%60n],['s',n/1000n%60n],['ms',n%1000n]])group.querySelector(`[data-${k}]`).value=String(v);
-
-    group.dataset.loaded='1';
-
-  }
-
-  for(const form of document.querySelectorAll('form[data-pulse]')){
-
-    if(d.rx_known&&!form.dataset.loaded){fillDuration(form,d.pulse_ms);form.elements.policy.value=d.policy;form.elements.loss.value=d.loss;form.elements.armed.value=d.rx_armed?'1':'0';form.elements.polarity.value=d.polarity;if(form.elements.loss_seconds)form.elements.loss_seconds.value=d.loss_seconds;form.dataset.loaded='1';}
-
-  }
-
-  const groups=[['Estado general',/^(role|version|prototype|uptime)/],['Comunicación LoRa',/(link|quality|rssi|snr|ack|rtt|tx_|retries|packets)/],['Sensor',/(ao|^do$|wet|simulated|battery|threshold|^on$|^off$|sample|confirm_ms|heartbeat|sleep|dowake)/],['Relé',/(rx_|contact|pulse|remaining|policy|loss|polarity|armed)/],['Sistema',/.*/]];
-
-  const ordered=[];let left=Object.entries(d);for(const [title,pattern]of groups){const rows=left.filter(([k])=>pattern.test(k));left=left.filter(([k])=>!pattern.test(k));if(rows.length)ordered.push([title,'Local / último dato remoto indicado por rx_ o remote_'],...rows);}
-
-  $('data').replaceChildren(...ordered.map(([key,value])=>{const row=document.createElement('tr');for(const t of [key,value===null?'—':String(value)]){const cell=document.createElement('td');cell.textContent=t;row.append(cell);}return row;}));
-
 }
-
+const fields={
+  wet:['Lluvia detectada','Estado MOJADO/SECO; físico o simulado según el modo'],
+  simulated:['Simulación','Indica si se ignoran las lecturas físicas para controlar el estado'],
+  sensor_mode:['Modo del sensor','Manual = órdenes MOJADO/SECO; físico = lectura AO'],
+  state_age_ms:['Tiempo en estado','Tiempo transcurrido desde el último cambio del emisor'],
+  wet_state_age_ms:['Tiempo de lluvia observada','Tiempo desde el cambio de estado recibido por el receptor'],
+  relay_state_age_ms:['Tiempo en estado del relé','Tiempo desde la última orden que cambió la salida del relé. No hay realimentación física'],
+  rx_state_observed_ms:['Antigüedad del estado de relé','Tiempo desde el último cambio observado por el emisor a través de ACK'],
+  manual_feedback:['Resultado de prueba manual','ACK pendiente o confirmado para MOJADO/SECO'],
+  manual_pending:['Orden pendiente','Se espera confirmación del receptor'],
+  link_ok:['Enlace reciente','Verdadero cuando hay una comunicación LoRa reciente'],
+  quality_pct:['Calidad estimada','Indicador orientativo basado en RSSI, SNR y confirmaciones, no mide distancia'],
+  ack_age_ms:['Antigüedad de comunicación','Tiempo desde la última trama autenticada'],
+  rssi_dbm:['Potencia RSSI (dBm)','Potencia recibida en dBm; menos negativa suele significar mejor recepción'],
+  snr_db:['SNR (dB)','Relación señal/ruido; valores mayores indican mejores condiciones de recepción'],
+  rx_rssi_dbm:['RSSI TX→RX (dBm)','Potencia del emisor observada por el receptor y recibida en un ACK'],
+  rx_snr_db:['SNR TX→RX (dB)','SNR en el receptor, comunicado mediante ACK'],
+  rtt_ms:['RTT (ms)','Tiempo entre transmisión y confirmación, incluyendo procesamiento'],
+  acked_states:['Estados confirmados','Número de informes de estado confirmados por LoRa'],
+  sent_states:['Estados enviados','Número de intentos de envío de estados'],
+  retries:['Reintentos','Intentos adicionales tras no recibir confirmación'],
+  ack_timeouts:['ACK expirados','Confirmaciones no recibidas dentro del tiempo esperado'],
+  rx_packets:['Paquetes recibidos','Número de tramas de estado autenticadas recibidas por RX'],
+  rx_armed:['Control automático','Indica si se permite accionar la salida según la lógica programada'],
+  rx_coil:['Orden de bobina','Orden eléctrica solicitada, no lectura del contacto real'],
+  contact_nc:['Contacto NC','Tipo de contacto físico configurado al compilar el receptor'],
+  remaining_ms:['Tiempo restante (ms)','Último temporizador comunicado; en vista remota puede estar desactualizado'],
+  rx_restored:['Rearme requerido','Se requiere rearme manual tras restaurar una activación'],
+  remote_last_reply_age_ms:['Antigüedad de consulta remota','Tiempo desde la última respuesta de administración del dispositivo remoto'],
+  management_state:['Operación LoRa','Estado de las órdenes de administración entre dispositivos'],
+  airtime_used_ms:['Tiempo de radio utilizado','Emisión acumulada dentro de la ventana móvil controlada'],
+  duty_wait_ms:['Espera de radio','Tiempo de espera impuesto por el presupuesto de tiempo en aire'],
+  battery_mv:['Batería (mV)','0 significa lectura no disponible y no batería descargada'],
+  ao:['AO (ADC)','Lectura analógica del sensor; no equivale a porcentaje de lluvia'],
+  do:['DO digital','Entrada digital del comparador; puede ser inválida si está desconectada'],
+  tx_packets:['Tramas transmitidas','Total de tramas emitidas por la placa local'],
+  uptime_ms:['Tiempo encendido','Tiempo transcurrido desde el arranque o despertar']
+};
+function telemetry(d){
+  const container=$('data');if(!container)return;
+  const groups=[
+    ['Estado y control',/^(wet|simulated|sensor_mode|state_age_ms|wet_state_age_ms|relay_state_age_ms|rx_state_observed_ms|rx_active|rx_armed|rx_coil|contact_nc|remaining_ms|manual_|link_ok|ack_age_ms|quality_pct|maintenance)$/,'Estados principales y cuánto tiempo llevan así, con indicación de su procedencia.'],
+    ['Comunicación LoRa',/(rssi|snr|rtt|ack|retries|packets|tx_|rx_|link|quality|airtime|duty)/,'Potencia, ruido, intercambio de tramas, confirmaciones y disponibilidad de radio.'],
+    ['Sensor de lluvia',/^(ao|do|wet|battery_mv|on|off|sample|confirm_ms|heartbeat|sleep|dowake|simulated|sensor_mode)$/,'Mediciones físicas, umbrales de calibración e intervalos.'],
+    ['Relé y temporización',/(relay|coil|armed|contact|pulse|remaining|policy|loss|polarity|restored|activation)/,'Estado lógico del contacto y configuración de maniobra. Sin lectura física del contacto.'],
+    ['Dispositivo remoto',/^remote_|^management_/,'Última información recibida del otro dispositivo; puede ser antigua.'],
+    ['Sistema y diagnóstico',/.*/,'Información avanzada, contadores y configuración interna.']
+  ];
+  const rank=new Map(['wet','sensor_mode','state_age_ms','wet_state_age_ms','relay_state_age_ms','rx_state_observed_ms','rx_armed','rx_coil','contact_nc','remaining_ms','manual_feedback','manual_pending','link_ok','quality_pct','ack_age_ms','rssi_dbm','snr_db','rx_rssi_dbm','rx_snr_db','rtt_ms','acked_states','sent_states','retries','ack_timeouts','rx_packets','remote_last_reply_age_ms','management_state'].map((key,i)=>[key,i]));
+  const entries=Object.entries(d), grouped=[];
+  for(const [heading,pattern,help] of groups){
+    const rows=entries.filter(([key])=>pattern.test(key)&&!grouped.some(g=>g.rows.some(([k])=>k===key)));
+    if(rows.length){rows.sort(([a],[b])=>(rank.get(a)??999)-(rank.get(b)??999));grouped.push({heading,rows,help});}
+  }
+  container.replaceChildren(...grouped.map((g,i)=>{
+    const details=document.createElement('details');details.className='telemetry-group';details.open=i===0;
+    const summary=document.createElement('summary');summary.textContent=g.heading+' · '+g.rows.length+' datos';
+    const info=document.createElement('span');info.className='telemetry-help';info.title=g.help;info.textContent=' ⓘ';summary.append(info);details.append(summary);
+    const table=document.createElement('table'),body=document.createElement('tbody');
+    for(const [key,val] of g.rows){
+      const tr=document.createElement('tr'),label=document.createElement('td'),value=document.createElement('td');
+      const def=fields[key];label.textContent=def?def[0]:key.replaceAll('_',' ');
+      const help=document.createElement('span');help.className='telemetry-help';
+      help.title=def?def[1]:(key.startsWith('remote_')?'Dato del dispositivo remoto; consulta su antigüedad.':key.startsWith('rx_')?'Último dato comunicado del receptor.':'Diagnóstico o configuración técnica del dispositivo.');
+      help.textContent=' ⓘ';label.append(help);
+      value.textContent=val===null?'—':String(val);tr.append(label,value);body.append(tr);
+    }
+    table.append(body);details.append(table);return details;
+  }));
+}
+function paint(d){
+  lastStatus=d;
+  const local=selectedRole===connectedRole,viewTx=selectedRole==='TX',hostTx=connectedRole==='TX';
+  const age=d.ack_age_ms,fresh=d.link_ok===true;
+  const known=local||(viewTx?(d.remote_known||age!==null):!!d.rx_known);
+  const wet=viewTx?(hostTx?!!d.wet:(d.remote_known?!!d.remote_wet:!!d.wet)):(hostTx?!!d.rx_wet:!!d.wet);
+  const sim=viewTx?(hostTx?!!d.simulated:(d.remote_known?!!d.remote_simulated:!!d.simulated)):(hostTx?!!d.simulated:!!d.simulated);
+  const closed=d.contact_nc?!d.rx_coil:!!d.rx_coil;
+  const elapsed=viewTx?(hostTx?d.state_age_ms:d.wet_state_age_ms):(hostTx?d.rx_state_observed_ms:d.relay_state_age_ms);
+  const packetCount=viewTx?(hostTx?d.acked_states:(d.remote_known?d.remote_tx_packets:d.rx_packets)):(hostTx?(d.remote_known?d.remote_rx_packets:null):d.rx_packets);
+  if($('quality'))$('quality').textContent=fresh&&d.quality_pct>=0?d.quality_pct+' %':'--%';
+  $('link').textContent=fresh?'Confirmado':age===null?'Sin confirmar':'Sin enlace';
+  $('age').textContent=age===null?'Aún sin respuesta':timeSince(age)+' desde la última comunicación';
+  if($('rainMetricTitle'))$('rainMetricTitle').textContent=viewTx?'Sensor de lluvia':'Lluvia recibida';
+  $('rain').textContent=known?(wet?'MOJADO':'SECO'):'Sin datos';
+  $('source').textContent=known?(sim?'Simulación activa':'Sensor físico')+(local?'':' · LoRa'):'Pendiente de recepción';
+  if($('relayMetricTitle'))$('relayMetricTitle').textContent=viewTx?'Control del sensor':'Relé / salida esperada';
+  $('relay').textContent=viewTx?(known?(sim?'MANUAL':'FÍSICO'):'Sin datos'):(known?(closed?'CERRADO':'ABIERTO'):'Sin datos');
+  $('remaining').textContent=viewTx?(hostTx?(d.manual_feedback||'Sensor activo'):(d.remote_known?'Configuración consultada':'Última observación recibida')):(d.rx_restored?'Rearme manual pendiente':durationText(d.remaining_ms)+(local?'':' · último ACK'));
+  if($('signalMetricTitle'))$('signalMetricTitle').textContent='RSSI '+(hostTx?(viewTx?'RX→TX':'TX→RX'):'TX→RX');
+  const rssi=hostTx&&!viewTx?d.rx_rssi_dbm:d.rssi_dbm;
+  const snr=hostTx&&!viewTx?d.rx_snr_db:d.snr_db;
+  $('signal').textContent=known&&age!==null?rssi+' dBm':'—';
+  $('snr').textContent=known&&age!==null?'SNR '+snr+' dB':'Sin datos nuevos';
+  if($('contactInfo'))$('contactInfo').textContent=viewTx?(hostTx?'Lecturas del sensor local':'Última lectura del emisor comunicada por LoRa'):'Contacto '+(d.contact_nc?'NC':'NO')+' · '+(local?'Estado calculado local':'Última orden conocida')+' · Control '+(d.rx_armed?'habilitado':'deshabilitado')+' · sin realimentación física';
+  $('radioNote').textContent=BigInt(d.duty_wait_ms||0)>0?'Radio en espera de presupuesto: '+Math.ceil(Number(d.duty_wait_ms)/1000)+' s. Los eventos pendientes se conservan.':'Últimas mediciones reales · SF'+d.sf+' · '+d.frequency_mhz+' MHz · '+d.airtime_ms+' ms por trama.';
+  if($('viewStateTitle'))$('viewStateTitle').textContent=viewTx?'Estado del emisor':'Estado del relé';
+  if($('viewState'))$('viewState').textContent=known?(viewTx?(wet?'MOJADO':'SECO'):(closed?'CERRADO':'ABIERTO')):'Sin datos';
+  if($('viewStateAge'))$('viewStateAge').textContent=known?(local?'En este estado desde hace ':'Cambio observado hace ')+timeSince(elapsed):'Sin observaciones';
+  if($('viewLink'))$('viewLink').textContent=fresh?'ENLACE OK':'SIN ENLACE';
+  if($('viewLinkAge'))$('viewLinkAge').textContent='Último intercambio: '+timeSince(age);
+  if($('viewCountTitle'))$('viewCountTitle').textContent=viewTx?'Estados / recepciones':'Recepciones en RX';
+  if($('viewCount'))$('viewCount').textContent=packetCount===undefined||packetCount===null?'—':packetCount;
+  if($('viewCountInfo'))$('viewCountInfo').textContent=local?'Contador local':'Última telemetría disponible';
+  if($('sensorLive'))$('sensorLive').textContent='AO '+d.ao+' / 4095 · DO '+(d.do??'—')+' · '+(d.wet?'Mojado':'Seco')+(d.simulated?' (simulación)':'');
+  if($('manualModeState'))$('manualModeState').textContent='Sensor '+(d.simulated?'DESACTIVADO · control manual':'ACTIVADO · lectura física')+' · '+(d.manual_feedback||'');
+  for(const id of ['manualWet','manualDry'])if($(id))$(id).disabled=!d.prototype||!d.simulated;
+  if($('remoteState'))$('remoteState').textContent=(d.management_state||'Sin operaciones')+(d.remote_ssid?' · SSID remoto: '+d.remote_ssid:'')+' · Última consulta: '+timeSince(d.remote_last_reply_age_ms);
+  $('connection').textContent='Wi-Fi conectado directamente al '+(hostTx?'Emisor':'Receptor')+' · datos actualizados';
+  if($('receiverCommand'))$('receiverCommand').textContent=d.config_pending?'Pendiente de confirmar':d.command_result||'';
+  if($('recordState')){
+    $('recordState').textContent=d.recording?'Grabando · '+durationText(d.record_elapsed_ms)+' · '+d.record_rows+' filas':d.record_rows+' filas · '+(d.record_error||'Detenido');
+    $('startRecord').disabled=d.recording||d.filesystem_ready===false||!d.prototype;$('stopRecord').disabled=!d.recording;
+  }
+  if(!initial){
+    const device=document.querySelector('form[action="/device"]');device.elements.mode.value=d.prototype?'prototype':'production';device.elements.display.value=d.display_enabled?'1':'0';
+    for(const form of document.querySelectorAll('form[data-save]'))for(const el of form.elements){if(el.name&&d[el.name]!==undefined)el.value=String(d[el.name]);}
+    initial=true;
+  }
+  if($('theme'))for(const group of document.querySelectorAll('[data-time]')){
+    const key=group.dataset.time;if(group.dataset.loaded||d[key]===undefined||(key.startsWith('remote_')&&!d.remote_known))continue;
+    let n=BigInt(d[key])*BigInt(group.dataset.unit||1);
+    for(const [k,v]of [['h',n/3600000n],['m',n/60000n%60n],['s',n/1000n%60n],['ms',n%1000n]])group.querySelector('[data-'+k+']').value=String(v);
+    group.dataset.loaded='1';
+  }
+  for(const form of document.querySelectorAll('form[data-pulse]')){
+    if(d.rx_known&&!form.dataset.loaded){fillDuration(form,d.pulse_ms);form.elements.policy.value=d.policy;form.elements.loss.value=d.loss;form.elements.armed.value=d.rx_armed?'1':'0';form.elements.polarity.value=d.polarity;if(form.elements.loss_seconds)form.elements.loss_seconds.value=d.loss_seconds;form.dataset.loaded='1';}
+  }
+  telemetry(d);
+}
 async function refresh(){try{const r=await fetch('/status',{cache:'no-store'});if(!r.ok)throw Error(`HTTP ${r.status}`);paint(await r.json());}catch(e){$('connection').textContent='Sin conexión Wi-Fi · los datos visibles son anteriores';}}
 
 document.querySelectorAll('form[data-save]').forEach(form=>form.addEventListener('submit',async e=>{
@@ -158,7 +235,7 @@ if($('theme')){
 
   $('remoteSensor').hidden=tx;
 
-  for(const [id,remote] of [['localTab',false],['remoteTab',true]])$(id).addEventListener('click',()=>{$('localSpace').hidden=remote;$('remoteSpace').hidden=!remote;});
+  if($('remoteTest'))$('remoteTest').hidden=connectedRole!=='RX';
 
   // All operational times use a shared H:M:S:ms editor. Integer arithmetic preserves 64-bit durations.
 
@@ -177,6 +254,10 @@ if($('theme')){
   });
 
 }
+
+$('selectTx').addEventListener('click',()=>chooseRole('TX'));
+$('selectRx').addEventListener('click',()=>chooseRole('RX'));
+chooseRole(connectedRole);
 
 refresh();setInterval(refresh,1000);
 

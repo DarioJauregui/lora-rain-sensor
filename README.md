@@ -1,4 +1,13 @@
-# LoraRainSensor 1.2.0-prototype
+# LoraRainSensor 1.2.1-prototype
+
+## Navegación unificada y pruebas de campo
+
+El selector **Emisor (azul) / Receptor (naranja)** aparece en primer lugar en ambos portales. El color corresponde al tipo de dispositivo, independientemente del Wi-Fi al que se conecte el usuario. La insignia **Wi-Fi directo** indica el dispositivo anfitrión; el otro se administra **vía LoRa**. Cambiar de pestaña no cambia la conexión Wi-Fi ni hace una actualización de firmware remota.
+
+En modo Prototipo, desde TX puede desactivarse la entrada del sensor para utilizar **Enviar MOJADO / Enviar SECO** con ACK verificable, incluso con AO/DO desconectados. Desde RX también se pueden enviar esas órdenes al TX por administración LoRa cifrada. La telemetría ordena los indicadores en bloques, explica su significado y distingue edades locales de últimos estados observados en remoto.
+
+El firmware RX utiliza **GPIO5 por defecto** como mando de relé. Hay además una imagen experimental **Receptor-GPIO2-NO** para quien haya cableado el pin de señal del relé a GPIO2, con salida activa HIGH. Comprobar el tipo de módulo, el nivel de disparo y el contacto NO/NC con la carga desconectada antes de usar cualquier variante.
+
 
 Versión de desarrollo para Heltec WiFi LoRa 32 V3. **Protocolo 3: actualizar ambos nodos.** Las pruebas de compilación no validan el montaje ni la precisión física de un relé.
 

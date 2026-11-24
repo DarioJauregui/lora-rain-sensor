@@ -3,8 +3,21 @@
 static const char PORTAL_HTML[] PROGMEM = R"HTML(<!doctype html>
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>LoraRainSensor</title><style>
-:root{--surface:#fff;--field:#fff;--page:#f3f6f8;--metric:#f5f8fa}
+:root{--surface:#fff;--field:#fff;--page:#f3f6f8;--metric:#f5f8fa;--tx:#1767b5;--rx:#b65a0a}
 :root[data-theme=dark]{color-scheme:dark;--surface:#182630;--field:#1f333f;--page:#101b23;--metric:#20323f;--ink:#edf4f7;--muted:#adc0cd;--line:#3a4e5b;--accent:#298494}
+main[data-view="TX"]{--accent:var(--tx)}main[data-view="RX"]{--accent:var(--rx)}
+.device-selector{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:12px}
+.device-choice{position:relative;text-align:left;border:2px solid var(--node);border-radius:12px;padding:11px 15px;background:var(--surface);color:var(--ink);min-width:0}
+.device-choice.tx{--node:var(--tx)}.device-choice.rx{--node:var(--rx)}
+.device-choice strong{display:block;color:var(--node);font-size:16px}.device-choice small{display:block;margin-top:4px}
+.device-choice.active{background:var(--node);color:#fff}.device-choice.active strong,.device-choice.active small{color:#fff}
+.device-choice .connection-icon{font-size:11px;font-weight:700}
+.view-context{display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;padding:4px 2px 10px;font-size:12px;color:var(--muted)}
+#viewContext{color:var(--accent);font-weight:700}.telemetry-group{margin:8px 0;padding:10px 12px}
+.telemetry-group>summary{display:flex;justify-content:space-between;align-items:center}
+.telemetry-group table{margin-top:10px}.telemetry-group td:first-child{font-weight:600}
+.telemetry-group td{max-width:50%;font-variant-numeric:tabular-nums}.telemetry-help{font-size:12px;font-weight:400;color:var(--muted);cursor:help}
+.telemetry-focus{border-left:4px solid var(--accent)}.device-choice:focus-visible{outline:3px solid var(--node);outline-offset:3px}.status-age{font-size:13px;color:var(--muted)}
 .time-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}.duration{grid-column:1/-1;border:1px solid var(--line);border-radius:8px;min-width:0}.duration input{min-width:0}.tabs{display:flex;gap:8px;margin:16px 0}.selected{outline:2px solid var(--accent)}
 
 :root{color-scheme:light;--ink:#192b36;--muted:#526574;--line:#d7e0e5;--accent:#176877}
@@ -24,8 +37,13 @@ button:disabled{opacity:.5;cursor:wait}summary{cursor:pointer;font-weight:600}de
 table{width:100%;border-collapse:collapse;font-size:13px}td{padding:7px;border-bottom:1px solid var(--line);overflow-wrap:anywhere}td:last-child{text-align:right}
 #notice{padding:10px 0;min-height:38px}#connection{font-size:13px}.error{color:#9f2929}input[type=file]{width:auto}
 @media(max-width:520px){.time-grid label{font-size:11px;overflow-wrap:anywhere}.time-grid input{padding:7px;}main{padding:12px}section,details{padding:14px}.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.metric b{font-size:19px}header{align-items:start;flex-direction:column}}
-</style></head><body><main data-role="__ROLE__">
-<header><h1>LoraRainSensor · __ROLE__</h1><small>__VERSION__</small><label>Tema<select id="theme"><option value="auto">Automático</option><option value="light">Claro</option><option value="dark">Oscuro</option></select></label></header>
+</style></head><body><main data-role="__ROLE__" data-view="__ROLE__">
+<nav class="device-selector" aria-label="Seleccionar dispositivo">
+<button class="device-choice tx" id="selectTx" type="button" aria-pressed="false"><strong>Emisor · TX</strong><small class="connection-icon" id="accessTx">...</small></button>
+<button class="device-choice rx" id="selectRx" type="button" aria-pressed="false"><strong>Receptor · RX</strong><small class="connection-icon" id="accessRx">...</small></button>
+</nav>
+<div class="view-context"><span id="viewContext">Seleccionando dispositivo...</span><span id="directContext">Conexión...</span></div>
+<header><h1>LoraRainSensor</h1><small>__VERSION__</small><label>Tema<select id="theme"><option value="auto">Automático</option><option value="light">Claro</option><option value="dark">Oscuro</option></select></label></header>
 <div id="notice" role="status" aria-live="polite"></div><div id="connection">Conectando al dispositivo…</div>
 <section><form action="/device" data-save>
 <div class="grid"><label>Modo<select name="mode"><option value="prototype">Prototipo</option><option value="production">Producción</option></select></label>
@@ -35,25 +53,32 @@ table{width:100%;border-collapse:collapse;font-size:13px}td{padding:7px;border-b
 <details class="help"><summary aria-label="Ayuda del modo">?</summary><p>En producción el emisor puede dormir entre lecturas y el portal cierra a los tres minutos del arranque. Para recuperar Wi-Fi tras apagarlo, reinicia la placa. Reiniciar el receptor interrumpe su salida.</p></details></small></div></form></section>
 <section><div class="actions"><h2>Estado del enlace</h2><button id="refreshLink" data-command="/link-refresh" aria-label="Actualizar medición del enlace" title="Solicitar una medición LoRa nueva">↻</button></div><div class="grid">
 <div class="metric"><span>Calidad del enlace <details class="help"><summary aria-label="Ayuda de calidad">i</summary><p>Estimación: 35 % RSSI, 25 % SNR y 40 % confirmaciones reales. RSSI es potencia recibida: un valor menos negativo es mejor. SNR compara señal y ruido: mayor es mejor. No mide distancia ni intensidad de lluvia. --% indica ausencia de datos vigentes.</p></details></span><b id="quality">--%</b><small id="link">Sin confirmar</small><small id="age">Sin datos</small></div>
-<div class="metric"><span>Sensor / origen</span><b id="rain">—</b><small id="source">—</small></div>
-<div class="metric"><span>Receptor · salida ordenada</span><b id="relay">—</b><small id="remaining">Sin confirmación</small></div>
-<div class="metric"><span>Señal de la última respuesta</span><b id="signal">—</b><small id="snr">—</small></div></div>
+<div class="metric"><span id="rainMetricTitle">Sensor / origen</span><b id="rain">—</b><small id="source">—</small></div>
+<div class="metric"><span id="relayMetricTitle">Relé / salida</span><b id="relay">—</b><small id="remaining">Sin confirmación</small></div>
+<div class="metric"><span id="signalMetricTitle">Señal de la última respuesta</span><b id="signal">—</b><small id="snr">—</small></div></div>
 <p class="hint" id="contactInfo"></p><p class="hint" id="radioNote">Las lecturas de radio se actualizan con cada intercambio confirmado.</p></section>
-<div class="tabs"><button id="localTab" class="selected">Este dispositivo</button><button id="remoteTab">Dispositivo remoto</button></div>
 <div id="localSpace">__CONTROLS__
 <details><summary>Identidad y acceso · este dispositivo</summary><form action="/access" data-save>
 <input name="target" type="hidden" value="local"><label>SSID<input name="ssid" maxlength="32" required autocomplete="off"></label>
 <label>Nueva contraseña Wi-Fi y admin<input name="password" type="password" minlength="16" maxlength="63" required autocomplete="new-password"></label>
 <p class="hint">16–63 caracteres ASCII sin espacios, con letras y números. Se reconectará al nuevo SSID; usuario fijo admin.</p><button>Guardar y reconectar</button></form></details>
 <details><summary>Emparejamiento LoRa local</summary><form action="/pair" data-save><label>Clave común de 32 bytes (64 hex)<input type="password" name="key" minlength="64" maxlength="64" required autocomplete="off"></label><button>Guardar clave y reiniciar</button></form></details></div>
-<div id="remoteSpace" hidden><h2>Dispositivo remoto</h2><p id="remoteState" role="status">Sin consulta</p><button data-command="/remote-read">Consultar configuración</button><div id="remoteControls"></div>
+<div id="remoteSpace" hidden><h2>Configuración a través de LoRa</h2>
+<p class="hint">Los cambios se envían al otro equipo y requieren confirmación. Los datos mostrados son los últimos comunicados.</p>
+<p id="remoteState" role="status">Sin consulta</p><button data-command="/remote-read">Consultar configuración</button><div id="remoteControls"></div>
+<section id="remoteTest"><h2>Prueba remota del emisor</h2><p class="hint">Disponible en modo Prototipo. Desactiva primero el sensor físico para enviar estados manuales.</p>
+<div class="actions"><button data-command="/remote-simulate" data-value="off">Desactivar sensor</button><button data-command="/remote-simulate" data-value="wet">Enviar MOJADO</button><button data-command="/remote-simulate" data-value="dry">Enviar SECO</button><button data-command="/remote-simulate" data-value="sensor">Activar sensor físico</button></div></section>
 <details id="remoteSensor"><summary>Sensor y funcionamiento del emisor</summary><form action="/remote-settings" data-save>
 <div class="grid"><label>Mojado si AO ≤<input name="remote_on" type="number" value="3500" min="0" max="3900" required></label><label>Seco si AO ≥<input name="remote_off" type="number" value="3900" min="1" max="4095" required></label>
 <label>Lectura despierto (ms)<input name="remote_sample" type="number" value="50" min="10" max="60000" required></label><label>Confirmación (ms)<input name="remote_confirm_ms" type="number" value="0" min="0" max="60000" required></label>
 <label>Telemetría (ms)<input name="remote_heartbeat_ms" type="number" value="30000" min="1000" max="86400000" required></label><label>Suspensión (ms)<input name="remote_sleep_ms" type="number" value="120000" min="1000" max="86400000" required></label>
 <label>Modo<select name="remote_prototype"><option value="1">Prototipo</option><option value="0">Producción</option></select></label><label>DO<select name="remote_dowake"><option value="0">Desactivado</option><option value="1">Despertar por LOW</option></select></label></div><button>Enviar configuración</button></form></details>
 <details><summary>Identidad y acceso · remoto</summary><form action="/access" data-save><input name="target" type="hidden" value="remote"><label>Nuevo SSID<input name="ssid" maxlength="32" required autocomplete="off"></label><label>Nueva contraseña<input type="password" name="password" minlength="16" maxlength="63" required autocomplete="new-password"></label><p class="hint">Cifrado AES-GCM; se confirma después de guardar. La contraseña no se devuelve en el diagnóstico.</p><button>Enviar cambio cifrado</button></form></details></div>
-<details id="telemetry"><summary>Telemetría completa</summary><div><table><tbody id="data"></tbody></table></div></details>
+<section id="telemetryOverview" class="telemetry-focus"><h2>Estado y tiempos <span class="telemetry-help" title="Se distinguen mediciones locales y últimas observaciones recibidas por LoRa.">ⓘ</span></h2>
+<div class="grid"><div class="metric"><span id="viewStateTitle">Estado</span><b id="viewState">—</b><small id="viewStateAge">—</small></div>
+<div class="metric"><span>Comunicación LoRa</span><b id="viewLink">—</b><small id="viewLinkAge">—</small></div>
+<div class="metric"><span id="viewCountTitle">Confirmaciones</span><b id="viewCount">—</b><small id="viewCountInfo">—</small></div></div></section>
+<details id="telemetry"><summary>Telemetría completa <span class="telemetry-help" title="Indicadores de comunicación, sensor, relé y sistema, priorizados y con unidades explicadas.">ⓘ</span></summary><div id="data"></div></details>
 <details><summary>Actualizar firmware</summary><form method="POST" enctype="multipart/form-data" action="/update?token=__TOKEN__">
 <p class="hint">Archivo .bin de este rol. El receptor mantiene la salida desenergizada durante mantenimiento. Si la carga falla, reinicia para recuperar el servicio.</p>
 <input type="file" name="firmware" accept=".bin" required><button>Actualizar</button></form></details>

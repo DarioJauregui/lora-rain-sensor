@@ -135,6 +135,23 @@ void updateSensor(bool immediate=false) {
   detector.sample(analogRain,rainOnThreshold,rainOffThreshold,now,corePrototype?0:confirmMs);
   if(oldWet!=wetNow()) {sensorStateSinceMs=now;if(wetNow())latchRainEvent();recordEvent("sensor_change");queueState();}
 }
+// Shared by the local web portal and encrypted RX -> TX LoRa commands.
+bool applyManualSelection(uint8_t command) {
+  if(!corePrototype || command>3 || ((command==1||command==2)&&simulation<0))return false;
+  const bool previous=wetNow();
+  if(command==3) {
+    simulation=-1;updateSensor(true);
+    manualFeedback="Sensor fisico activo";manualAwaitingConfirmation=false;
+  } else {
+    simulation=command==0?(previous?1:0):(command==1?1:0);
+    manualFeedback="Esperando ACK del receptor";manualAwaitingConfirmation=true;
+  }
+  if(previous!=wetNow())sensorStateSinceMs=uptimeMs();
+  if(!previous&&wetNow())latchRainEvent();
+  if(pending||awaitingAck)forceStateAfterAck=true;else queueState();
+  recordEvent("simulation_change");
+  return true;
+}
 String roleControlsHtml() {
   String s=F("<section><h2>Experimento</h2><div class='actions'>"
     "<button class='primary' id='startRecord' data-command='/record/start'>Grabar</button>"
@@ -183,15 +200,10 @@ void configureRoleRoutes() {
   });
   web.on("/simulate",HTTP_POST,[](){
     if(!corePostAllowed())return;if(!corePrototype){web.send(409,"text/plain","Solo en prototipo");return;}
-    String value=web.arg("value");if(value!="off"&&value!="wet"&&value!="dry"&&value!="sensor"){web.send(400,"text/plain","Origen invalido");return;}
-    if((value=="wet"||value=="dry")&&simulation<0){web.send(409,"text/plain","Primero desactiva el sensor para usar el modo manual");return;}
-    bool previous=wetNow();
-    if(value=="sensor"){simulation=-1;updateSensor(true);manualFeedback="Sensor fisico activo";manualAwaitingConfirmation=false;}
-    else {simulation=value=="wet"?1:0;manualFeedback="Esperando ACK del receptor";manualAwaitingConfirmation=true;}
-    if(previous!=wetNow())sensorStateSinceMs=uptimeMs();
-    if(!previous&&wetNow())latchRainEvent();
-    if(pending||awaitingAck)forceStateAfterAck=true;else queueState();
-    recordEvent("simulation_change");web.send(202,"text/plain",simulation>=0?"Orden manual pendiente de confirmacion LoRa":"Sensor fisico habilitado; nuevo estado pendiente de envio");
+    String value=web.arg("value");int command=value=="off"?0:value=="wet"?1:value=="dry"?2:value=="sensor"?3:-1;
+    if(command<0){web.send(400,"text/plain","Orden invalida");return;}
+    if(!applyManualSelection(command)){web.send(409,"text/plain","Activa el modo Prototipo y desactiva el sensor antes de enviar MOJADO/SECO");return;}
+    web.send(202,"text/plain",simulation>=0?"Orden manual pendiente de ACK LoRa":"Sensor fisico habilitado");
   });
   web.on("/receiver",HTTP_POST,[](){
     if(!corePostAllowed())return;uint64_t policy,loss,armed,polarity,seconds,duration;
@@ -242,6 +254,7 @@ String getStatusJson() {
     ",\"acked_states\":"+String(ackedStates)+",\"sent_states\":"+String(sentStates)+",\"retries\":"+String(retries)+",\"ack_timeouts\":"+String(ackTimeouts)+
     ",\"auth_rejects\":"+String(authRejects)+",\"event_pending\":"+String(rainEvent.pending?"true":"false")+
     ",\"config_pending\":"+String(configPending||resetPending?"true":"false")+",\"rx_known\":"+String(rxKnown?"true":"false")+
+    ",\"rx_wet\":"+String(receiver.wet?"true":"false")+
     ",\"rx_active\":"+String(receiver.flags&ACK_ACTIVE?"true":"false")+
     ",\"rx_armed\":"+String(receiver.flags&ACK_RELAY_ARMED?"true":"false")+",\"rx_coil\":"+String(receiver.flags&ACK_COIL_ON?"true":"false")+
     ",\"rx_maintenance\":"+String(receiver.flags&ACK_MAINTENANCE?"true":"false")+",\"rx_restored\":"+String(receiver.config&32?"true":"false")+
@@ -265,8 +278,9 @@ void processReceived() {
     if(sessionId!=f.session){sessionId=f.session;pending=false;awaitingAck=false;queueState();recordEvent("session_ready");}
   }else if(f.type==FRAME_ACK&&sessionId&&f.session==sessionId&&f.ackSeq==pendingFrame.seq&&awaitingAck){
     lastRssi=radio.getRSSI();lastSnr=radio.getSNR();remoteRssi=f.peerRssi10/10.0f;remoteSnr=f.peerSnr10/10.0f;
+    const bool firstReceiverState=!rxKnown;
     lastAck=uptimeMs();lastRtt=lastAck-txStarted;receiver=f;rxKnown=true;
-    if(!rxKnown||remoteContactClosed!=((f.config&128)?!(f.flags&ACK_COIL_ON):bool(f.flags&ACK_COIL_ON))){
+    if(firstReceiverState||remoteContactClosed!=((f.config&128)?!(f.flags&ACK_COIL_ON):bool(f.flags&ACK_COIL_ON))){
       remoteContactClosed=(f.config&128)?!(f.flags&ACK_COIL_ON):bool(f.flags&ACK_COIL_ON);
       remoteContactObservedSinceMs=lastAck;
     }
@@ -314,7 +328,7 @@ void serviceRadio() {
   if(rc==RADIOLIB_ERR_NONE){awaitingAck=true;ackStart=uptimeMs();}else nextSend=now+4000;
 }
 void setup() {
-  Serial.begin(115200);coreRole="TX";coreLoadDevice();loadSettings();coreInitDisplay();managementOnRx=onRadioReceive;
+  Serial.begin(115200);coreRole="TX";coreLoadDevice();loadSettings();coreInitDisplay();managementOnRx=onRadioReceive;managementApplyTest=applyManualSelection;
   pinMode(PIN_RAIN_AO,INPUT);pinMode(PIN_RAIN_DO,INPUT_PULLUP);analogReadResolution(12);analogSetPinAttenuation(PIN_RAIN_AO,ADC_11db);
   auto cause=esp_sleep_get_wakeup_cause();resumed=savedSignature==RTC_SIGNATURE&&(cause==ESP_SLEEP_WAKEUP_TIMER||cause==ESP_SLEEP_WAKEUP_EXT1);
   senderBoot=resumed?savedBoot:esp_random();txSequence=resumed?savedSeq:0;sessionId=resumed?savedSession:0;

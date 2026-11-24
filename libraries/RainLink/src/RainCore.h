@@ -21,7 +21,7 @@
 #include "Portal.h"
 
 // Version shared by the two devices; Arduino-ESP32 core 3.3.2, RadioLib 7.8.1.
-static const char *FW_VERSION = "1.2.0-prototype";
+static const char *FW_VERSION = "1.2.1-prototype";
 static const uint32_t PROTOCOL_MAGIC = 0x52414E39UL;
 static const uint8_t PROTOCOL_VERSION = 3;
 static const uint32_t TX_ID = 0x54583031UL;

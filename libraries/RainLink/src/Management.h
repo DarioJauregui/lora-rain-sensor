@@ -20,6 +20,7 @@ bool applyOperational(const Operational &);
 Operational getOperational();
 uint64_t managementSession();
 void managementRxAction();
+bool (*managementApplyTest)(uint8_t)=nullptr; // Optional TX-only manual sensor command
 bool managementCanSend();
 void (*managementOnRx)()=nullptr;
 uint32_t managementOwnBoot=0;
@@ -99,6 +100,7 @@ bool managementProcess(const RainFrame &f){
     if(d.kind==2){char ssid[33]{},pass[64]{};memcpy(ssid,d.bytes,33);memcpy(pass,d.bytes+33,64);
       ok=saveAccess(ssid,pass);memset(pass,0,sizeof(pass));memset(d.bytes,0,sizeof(d.bytes));memcpy(d.bytes,ssid,32);}
     if(d.kind==3){managementRxAction();ok=true;memset(d.bytes,0,sizeof(d.bytes));}
+    if(d.kind==4){ok=managementApplyTest&&managementApplyTest(d.bytes[0]);memset(d.bytes,0,sizeof(d.bytes));}
   }
   if(!ok)memset(d.bytes,0,sizeof(d.bytes));
   if(ok&&d.kind)recordEvent("remote_change_applied");
@@ -122,6 +124,8 @@ void managementTick(){
 String jsonEscape(String v){v.replace("\\","\\\\");v.replace("\"","\\\"");return v;}
 String managementStatus(){
   return ",\"paired\":"+String(corePaired?"true":"false")+",\"ssid\":\""+jsonEscape(coreApSsid)+"\",\"management_state\":\""+mgState+"\",\"remote_ssid\":\""+jsonEscape(mgPeerSsid)+"\",\"remote_known\":"+String(mgPeerKnown?"true":"false")+
+    ",\"remote_wet\":"+String(mgPeer.wet?"true":"false")+",\"remote_simulated\":"+String(mgPeer.simulated?"true":"false")+
+    ",\"remote_last_reply_age_ms\":"+(mgLastReply?"\""+u64(uptimeMs()-mgLastReply)+"\"":String("null"))+
     ",\"remote_sample\":"+String(mgPeer.sampleMs)+",\"remote_confirm_ms\":"+String(mgPeer.confirmMs)+",\"remote_heartbeat_ms\":"+String(mgPeer.heartbeatMs)+",\"remote_sleep_ms\":"+String(mgPeer.sleepMs)+
     ",\"remote_on\":"+String(mgPeer.on)+",\"remote_off\":"+String(mgPeer.off)+",\"remote_prototype\":"+String(mgPeer.prototype?1:0)+",\"remote_dowake\":"+String(mgPeer.doWake?1:0)+
     ",\"remote_uptime_ms\":\""+u64(mgPeer.uptime)+"\",\"remote_free_heap\":"+String(mgPeer.freeHeap)+",\"remote_ao\":"+String(mgPeer.ao)+",\"remote_do\":"+String(mgPeer.doLevel)+",\"remote_battery_mv\":"+String(mgPeer.battery)+",\"remote_rx_packets\":"+String(mgPeer.rxPackets)+",\"remote_tx_packets\":"+String(mgPeer.txPackets)+",\"remote_errors\":"+String(mgPeer.errors)+
@@ -141,6 +145,15 @@ void managementRoutes(){
     if(remote){ManagementData d{};d.kind=2;memcpy(d.bytes,ssid.c_str(),ssid.length());memcpy(d.bytes+33,pass.c_str(),pass.length());ok=managementQueue(d);memset(&d,0,sizeof(d));}
     else ok=saveAccess(ssid.c_str(),pass.c_str());
     pass="";web.send(ok?202:409,"text/plain",ok?(remote?"Cambio cifrado pendiente de aplicacion remota":"Guardado. Reconecta al nuevo SSID tras el reinicio"):"No se pudo guardar o hay otra operacion pendiente");
+  });
+  web.on("/remote-simulate",HTTP_POST,[](){
+    if(!corePostAllowed())return;
+    if(coreRole!="RX"){web.send(400,"text/plain","Disponible desde el receptor para administrar el emisor");return;}
+    String value=web.arg("value");int command=value=="off"?0:value=="wet"?1:value=="dry"?2:value=="sensor"?3:-1;
+    if(command<0){web.send(400,"text/plain","Orden de prueba invalida");return;}
+    ManagementData data{};data.kind=4;data.bytes[0]=command;
+    bool ok=managementQueue(data);
+    web.send(ok?202:409,"text/plain",ok?"Orden manual pendiente de confirmacion del emisor":"Hay otra operacion remota pendiente");
   });
   web.on("/remote-read",HTTP_POST,[](){if(!corePostAllowed())return;ManagementData d{};d.kind=0;bool ok=managementQueue(d);web.send(ok?202:409,"text/plain",ok?"Consulta pendiente":"Operacion pendiente");});
   web.on("/remote-settings",HTTP_POST,[](){if(!corePostAllowed())return;
