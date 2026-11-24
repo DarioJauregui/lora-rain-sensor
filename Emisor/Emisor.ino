@@ -131,12 +131,12 @@ void latchRainEvent() {
   if(!rainEvent.pending){uint32_t next;do{next=esp_random();}while(!next||next==rainEvent.id);rainEvent.raise(next);saveEvent();}
   recordEvent("rain_event");
 }
-void updateSensor(bool immediate=false) {
+void updateSensor(bool immediate=false,bool report=true) {
   uint64_t now=uptimeMs();if(!immediate && now-lastSample<testSampleMs)return;lastSample=now;
   bool oldWet=wetNow();analogRain=readRain();doLevel=digitalRead(PIN_RAIN_DO);
   if(sensorInput.manual)return; // La lectura física no gobierna el estado en modo manual.
   detector.sample(analogRain,rainOnThreshold,rainOffThreshold,now,corePrototype?0:confirmMs);
-  if(oldWet!=wetNow()) {sensorStateSinceMs=now;if(wetNow())latchRainEvent();recordEvent("sensor_change");queueState();}
+  if(report&&oldWet!=wetNow()) {sensorStateSinceMs=now;if(wetNow())latchRainEvent();recordEvent("sensor_change");queueState();}
 }
 // Shared by the local web portal and encrypted RX -> TX LoRa commands.
 bool applyManualSelection(uint8_t command) {
@@ -144,7 +144,7 @@ bool applyManualSelection(uint8_t command) {
   if(!sensorInput.select(command,corePrototype,detector.wet))return false;
   if(command==rain::PHYSICAL) {
     // Start a fresh physical decision; a manual episode must not retain old hysteresis.
-    detector={};updateSensor(true);
+    detector={};updateSensor(true,false);
   }
   manualFeedback="Esperando ACK del receptor";
   if(previous!=wetNow())sensorStateSinceMs=uptimeMs();
@@ -351,7 +351,7 @@ void loop() {
   coreTickPortal();coreTickDisplay(false);processReceived();managementTick();
   static bool previousPrototype=corePrototype;
   if(previousPrototype&&!corePrototype){bool old=wetNow();sensorInput.manual=false;sensorInput.pending=true;++sensorInput.revision;manualFeedback="Sensor fisico: esperando ACK";detector={};
-    updateSensor(true);if(old!=wetNow())sensorStateSinceMs=uptimeMs();if(!old&&wetNow())latchRainEvent();
+    updateSensor(true,false);if(old!=wetNow())sensorStateSinceMs=uptimeMs();if(!old&&wetNow())latchRainEvent();
     recordEvent("sensor_physical_production");if(recording){recordEvent("record_stop_mode");recordFile.close();recording=false;}
     if(pending||awaitingAck)forceStateAfterAck=true;else queueState();}
   previousPrototype=corePrototype;

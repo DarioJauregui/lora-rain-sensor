@@ -26,7 +26,8 @@ uint64_t uptimeMs(){return now;}
 uint16_t readRain(){return adc;}
 int digitalRead(uint8_t){return adc<3500?0:1;}
 void recordEvent(const char *event){events.emplace_back(event);}
-void latchRainEvent(){rainEvent.raise(42);}
+unsigned rainEvents=0;
+void latchRainEvent(){++rainEvents;rainEvent.raise(42);}
 bool coreDisplayEnabled=true,doWakeEnabled=false,coreMaintenance=false;
 uint32_t ackedStates=0,coreTxCount=0,authRejects=0,coreTxErrors=0;
 struct {uint32_t getFreeHeap(){return 1024;}} ESP;
@@ -74,8 +75,11 @@ int main(){
     adc=0;now+=50;updateSensor();assert(!wetNow());
     assert(sensorInput.acknowledge(pendingSensorRevision,false));pending=false;
   }
+  // Merely changing origin while already wet must not create a second episode.
+  assert(applyManualSelection(rain::MANUAL_WET));pending=false;
+  auto episodes=rainEvents;
   adc=0;
-  assert(applyManualSelection(rain::PHYSICAL));assert(!sensorInput.manual && wetNow());
+  assert(applyManualSelection(rain::PHYSICAL));assert(rainEvents==episodes);assert(!sensorInput.manual && wetNow());
   pending=false;adc=4095;now+=50;updateSensor();assert(!wetNow());
   corePrototype=false;assert(!applyManualSelection(rain::MANUAL));
   bool manual=false,wet=false,dry=false,physical=false;
