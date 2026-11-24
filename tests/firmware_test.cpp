@@ -8,7 +8,7 @@
 using String = std::string;
 constexpr uint8_t FRAME_STATE=1,STATE_SIMULATED=2,PIN_RAIN_DO=2;
 constexpr uint32_t TX_ID=1,RX_ID=2;
-struct RainFrame { uint8_t type,wet,flags; uint16_t ao,batteryMv; uint32_t seq,event,ackSeq,sender; uint64_t session; uint8_t payload[128]; };
+struct RainFrame { uint8_t type,wet,flags; uint16_t ao,batteryMv; uint32_t seq,event,ackSeq,sender; uint64_t session,echo; uint8_t payload[128]; };
 RainFrame newFrame(uint8_t type,uint32_t sender,uint32_t,uint32_t seq,uint64_t session){RainFrame f{};f.seq=seq;f.type=type;f.sender=sender;f.session=session;return f;}
 rain::Detector detector;
 rain::SensorInput sensorInput;
@@ -33,12 +33,13 @@ uint32_t ackedStates=0,coreTxCount=0,authRejects=0,coreTxErrors=0;
 struct {uint32_t getFreeHeap(){return 1024;}} ESP;
 String coreRole="TX",coreApSsid="test-TX",mgState,mgPeerSsid;
 uint64_t mgSession=0,mgLastReply=0;
-uint32_t mgHighest=0,mgSequence=0,managementOwnBoot=1;
+uint32_t mgHighest=0,mgSequence=0,managementOwnBoot=1,mgPeerRevision=0;
 bool mgHaveCache=false,mgWaiting=false,mgPeerKnown=false;
 RainFrame mgCached{},mgPending{};
 Operational mgPeer{};
 bool (*managementApplyTest)(uint8_t)=nullptr;
 uint32_t localId(){return coreRole=="TX"?TX_ID:RX_ID;}
+uint32_t managementSensorRevision(){return sensorInput.revision;}
 uint64_t managementSession(){return sessionId;}
 bool mgOpen(const RainFrame &f,ManagementData &d){memcpy(&d,f.payload,sizeof(d));return true;}
 bool mgSeal(RainFrame &f,const ManagementData &d){memcpy(f.payload,&d,sizeof(d));return true;}
@@ -61,6 +62,7 @@ int main(){
   assert(forceStateAfterAck && wetNow() && pendingFrame.seq==first && !pendingFrame.wet);
   assert(!sensorInput.acknowledge(oldRevision,false));
   pending=false;awaitingAck=false;forceStateAfterAck=false;queueState();
+  assert(pendingFrame.echo==sensorInput.revision);
   assert(pendingFrame.seq!=first && pendingFrame.wet && (pendingFrame.flags&STATE_SIMULATED));
   assert(sensorInput.acknowledge(pendingSensorRevision,false));
   pending=false;
@@ -98,7 +100,12 @@ int main(){
   managementProcess(request);assert(sensorInput.revision==revision); // duplicate must not apply again
   coreRole="RX";mgWaiting=true;mgPending.event=100;
   assert(managementProcess(mgCached));
+  assert(mgPeerRevision==sensorInput.revision);
   assert(mgPeerKnown && mgPeer.simulated && (mgPeer.reserved&1) && !mgWaiting && mgState=="Aplicada");
+  RainFrame observed{};observed.flags=STATE_SIMULATED;observed.wet=mgPeer.wet;observed.echo=mgPeerRevision-1;
+  managementObserveState(observed);assert(mgPeer.reserved&1); // same state, previous command
+  observed.echo=mgPeerRevision;managementObserveState(observed);
+  assert(!(mgPeer.reserved&1) && (mgPeer.reserved&2));
   coreRole="TX";request.seq=2;request.event=101;command.bytes[0]=rain::PHYSICAL;mgSeal(request,command);
   assert(managementProcess(request));mgOpen(mgCached,reply);memcpy(&applied,reply.bytes,sizeof(applied));
   assert(reply.result && !applied.simulated);

@@ -118,7 +118,7 @@ void queueState() {
   // Do not mutate an in-flight packet. The current state is queued after its ACK.
   if(pending || awaitingAck)return;
   pendingFrame=newFrame(FRAME_STATE,TX_ID,senderBoot,++txSequence,sessionId);
-  pendingSensorRevision=sensorInput.revision;
+  pendingSensorRevision=sensorInput.revision;pendingFrame.echo=pendingSensorRevision;
   pendingFrame.wet=wetNow();pendingFrame.ao=analogRain;pendingFrame.batteryMv=batteryMv;
   pendingFrame.event=rainEvent.pending?rainEvent.id:0;
   pendingFrame.ackSeq=((corePrototype?heartbeatMs:sleepMs)+999)/1000;
@@ -374,6 +374,7 @@ void loop() {
   delay(1);
 }
 
+uint32_t managementSensorRevision(){return sensorInput.revision;}
 uint64_t managementSession(){return sessionId;}
 void managementRxAction(){queueState();}
 void requestLink(){queueState();}

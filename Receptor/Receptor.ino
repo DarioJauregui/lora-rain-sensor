@@ -151,6 +151,7 @@ void processReceived(){
   if(f.type==FRAME_HELLO&&f.session){
     // Fresh unpredictable challenge authenticates states; boot counters need not survive a flash erase.
     if(!sessionReady||senderBoot!=f.boot||senderNonce!=f.session){
+      if(!sessionReady||senderBoot!=f.boot){mgPeerKnown=false;mgPeer={};mgPeerRevision=0;}
       senderBoot=f.boot;senderNonce=f.session;receiverSession=random64();if(!receiverSession)receiverSession=1;
       sessionReady=true;highestSeq=0;
     }
@@ -170,8 +171,7 @@ void processReceived(){
     highestSeq=f.seq;lastFresh=uptimeMs();mgLastSeen=lastFresh;mgPeerAsleep=f.flags&4;
     if(!haveState||lastRain!=(f.wet!=0))wetStateSinceMs=lastFresh;
     haveState=true;commsLost=false;lastRain=f.wet;simulated=f.flags&STATE_SIMULATED;
-    if(mgPeerKnown&&mgPeer.wet==lastRain&&mgPeer.simulated==simulated)mgPeer.reserved=(mgPeer.reserved&~1)|2;
-    if(mgPeerKnown&&!(mgPeer.reserved&1)){mgPeer.wet=lastRain;mgPeer.simulated=simulated;mgPeer.ao=f.ao;}
+    managementObserveState(f);
     lastAO=f.ao;lastBatteryMv=f.batteryMv;lastRssi=radio.getRSSI();lastSnr=radio.getSNR();++rxCount;
     bool event=f.event&&f.event!=lastEvent;bool wasActive=pulse.active;
     pulse.observe(lastRain,event,lastFresh);pulse.tick(lastFresh,true);if(event){lastEvent=f.event;persistDirty=true;}
@@ -200,6 +200,7 @@ void loop(){
   delay(1);
 }
 
+uint32_t managementSensorRevision(){return 0;}
 uint64_t managementSession(){return sessionReady?receiverSession:0;}
 void managementRxAction(){}
 void requestLink(){ManagementData d{};d.kind=3;managementQueue(d);}

@@ -14,10 +14,11 @@ struct __attribute__((packed)) Operational {
   uint8_t wet,simulated,reserved;
 };
 struct __attribute__((packed)) ManagementData { uint8_t kind, result; uint8_t bytes[98]; };
-static_assert(sizeof(Operational)+33<=98,"Snapshot and SSID fit in one encrypted reply");
+static_assert(sizeof(Operational)+33+sizeof(uint32_t)<=98,"Snapshot and SSID fit in one encrypted reply");
 static_assert(sizeof(ManagementData)==100,"Encrypted payload size");
 bool applyOperational(const Operational &);
 Operational getOperational();
+uint32_t managementSensorRevision();
 uint64_t managementSession();
 void managementRxAction();
 bool (*managementApplyTest)(uint8_t)=nullptr; // Optional TX-only manual sensor command
@@ -25,7 +26,7 @@ bool managementCanSend();
 void (*managementOnRx)()=nullptr;
 uint32_t managementOwnBoot=0;
 uint64_t mgCounter=0,mgLimit=0,mgSession=0,mgNext=0;
-uint32_t mgSequence=0,mgHighest=0;
+uint32_t mgSequence=0,mgHighest=0,mgPeerRevision=0;
 RainFrame mgPending{},mgCached{};
 bool mgWaiting=false,mgHaveCache=false;
 uint8_t mgAttempts=0;
@@ -78,6 +79,18 @@ bool managementQueue(const ManagementData &data){
   memcpy(mgPending.payload,&data,sizeof(data)); // RAM only; encrypted once a session is available.
   mgWaiting=true;mgAttempts=0;mgNext=0;mgState="Pendiente de envio";return true;
 }
+void managementSnapshot(ManagementData &d){
+  auto op=getOperational();memset(d.bytes,0,sizeof(d.bytes));memcpy(d.bytes,&op,sizeof(op));
+  memcpy(d.bytes+sizeof(op),coreApSsid.c_str(),coreApSsid.length());
+  uint32_t revision=managementSensorRevision();memcpy(d.bytes+sizeof(op)+33,&revision,sizeof(revision));
+}
+void managementObserveState(const RainFrame &f){
+  if(!mgPeerKnown)return;
+  bool manual=f.flags&STATE_SIMULATED;
+  if((mgPeer.reserved&1)&&(f.echo!=mgPeerRevision||manual!=bool(mgPeer.simulated)||(manual&&f.wet!=mgPeer.wet)))return;
+  mgPeer.reserved=(mgPeer.reserved&~1)|2;mgPeerRevision=f.echo;
+  mgPeer.wet=f.wet;mgPeer.simulated=manual;mgPeer.ao=f.ao;
+}
 bool managementProcess(const RainFrame &f){
   if(f.type!=7&&f.type!=8)return false;
   uint64_t session=managementSession();
@@ -89,13 +102,13 @@ bool managementProcess(const RainFrame &f){
   if(f.type==8){
     if(!mgWaiting||f.event!=mgPending.event)return true;
     mgState=d.result?"Aplicada":"Rechazada";mgWaiting=false;mgLastReply=uptimeMs();
-    if((d.kind==0||d.kind==1||d.kind==4)&&d.result){memcpy(&mgPeer,d.bytes,sizeof(mgPeer));mgPeerKnown=true;char ssid[33]{};memcpy(ssid,d.bytes+sizeof(mgPeer),32);mgPeerSsid=ssid;}
+    if((d.kind==0||d.kind==1||d.kind==4)&&d.result){memcpy(&mgPeer,d.bytes,sizeof(mgPeer));mgPeerKnown=true;char ssid[33]{};memcpy(ssid,d.bytes+sizeof(mgPeer),32);mgPeerSsid=ssid;memcpy(&mgPeerRevision,d.bytes+sizeof(mgPeer)+33,sizeof(mgPeerRevision));}
     if(d.kind==2&&d.result){char name[33]{};memcpy(name,d.bytes,32);mgPeerSsid=name;}
     memset(&mgPending,0,sizeof(mgPending));return true;
   }
   bool ok=false;
   if(!coreMaintenance){
-    if(d.kind==0){auto op=getOperational();memset(d.bytes,0,sizeof(d.bytes));memcpy(d.bytes,&op,sizeof(op));memcpy(d.bytes+sizeof(op),coreApSsid.c_str(),coreApSsid.length());ok=true;}
+    if(d.kind==0){managementSnapshot(d);ok=true;}
     if(d.kind==1){Operational op;memcpy(&op,d.bytes,sizeof(op));ok=applyOperational(op);}
     if(d.kind==2){char ssid[33]{},pass[64]{};memcpy(ssid,d.bytes,33);memcpy(pass,d.bytes+33,64);
       ok=saveAccess(ssid,pass);memset(pass,0,sizeof(pass));memset(d.bytes,0,sizeof(d.bytes));memcpy(d.bytes,ssid,32);}
@@ -103,10 +116,7 @@ bool managementProcess(const RainFrame &f){
     if(d.kind==4){ok=managementApplyTest&&managementApplyTest(d.bytes[0]);memset(d.bytes,0,sizeof(d.bytes));}
   }
   if(!ok)memset(d.bytes,0,sizeof(d.bytes));
-  if(ok&&(d.kind==1||d.kind==4)){
-    auto op=getOperational();memset(d.bytes,0,sizeof(d.bytes));memcpy(d.bytes,&op,sizeof(op));
-    memcpy(d.bytes+sizeof(op),coreApSsid.c_str(),coreApSsid.length());
-  }
+  if(ok&&(d.kind==1||d.kind==4))managementSnapshot(d);
   if(ok&&d.kind)recordEvent("remote_change_applied");
   d.result=ok;mgCached=newFrame(8,localId(),managementOwnBoot,++mgSequence,session);mgCached.event=f.event;
   if(mgSeal(mgCached,d)){mgHighest=f.seq;mgHaveCache=true;delay(65);transmitFrame(mgCached,managementOnRx);}

@@ -11,8 +11,8 @@ root = Path(__file__).resolve().parents[1]
 source = (root / "Emisor/Emisor.ino").read_text(encoding="utf-8")
 management = (root / "libraries/RainLink/src/Management.h").read_text(encoding="utf-8")
 functions = []
-for name in ("wetNow", "queueState", "updateSensor", "applyManualSelection", "getOperational", "managementProcess"):
-    selected = management if name == "managementProcess" else source
+for name in ("wetNow", "queueState", "updateSensor", "applyManualSelection", "getOperational", "managementSnapshot", "managementObserveState", "managementProcess"):
+    selected = management if name in ("managementSnapshot", "managementObserveState", "managementProcess") else source
     match = re.search(r"^(?:bool|void|Operational) " + name + r"\([^\n]*\)\s*\{", selected, re.M)
     assert match, name
     start = match.start()
