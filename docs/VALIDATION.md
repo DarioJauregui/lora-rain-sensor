@@ -1,5 +1,17 @@
 # Validación
 
+## Aceptación adicional 1.2.3
+
+- PC: monitor LoRa a la derecha, fijo durante desplazamiento; móvil: selector y monitor por encima de los controles.
+- Seleccionar TX/RX desde cada Wi-Fi. Abrir Configuración y verificar que las secciones existentes no han desaparecido.
+- Comparar fingerprint local de emparejamiento (8 hex) en ambos nodos; deben coincidir y mostrarse sin revelar la clave.
+- En RX deshabilitado y con carga desconectada, confirmar `PROBAR`; GPIO cambia durante dos segundos y se restablece, sin requerir LoRa.
+- Confirmar selección adecuada GPIO2/GPIO5 y nivel activo LOW/HIGH contra el módulo físico.
+- Pérdida temporal de radio: comprobar reconexión, sin pérdida de claves ni bucles de reinicio. Revisar `radio_recoveries`, `duty_wait_ms` y `auth_rejects`.
+- Descargar `/logs.csv` en cada Wi-Fi, forzar rotación tras 16 KiB; verificar conservación de orden temporal y longitud máxima 32 KiB.
+- El reloj depende de la sincronización con el navegador; sin ella `timestamp_utc_ms` queda vacío, conservando `uptime_ms`.
+
+
 ## Automática
 
 El workflow `Firmware checks` es el punto de entrada completo: ejecuta pruebas y compila TX, RX-NO y RX-NC (GPIO5). Solo publica desde main cuando no existe la versión. Dependencias fijadas en el workflow.

@@ -1,5 +1,14 @@
 # Historial
 
+## 1.2.3-prototype
+
+- Vista modular de escritorio, estado del enlace lateral fijo, configuración desplazada a diálogo sin retirar funciones móviles.
+- Identificación de par enlazado, diagnóstico de radio y recuperación de operaciones administrativas sin confirmación.
+- Prueba local GPIO del relé limitada a 2 segundos, desarmada y con confirmación explícita; variantes GPIO2 activas HIGH/LOW.
+- Registro circular por placa de eventos significativos con descarga y timestamp UTC cuando esté sincronizado.
+- Clarificación del cableado NO/NC frente a la polaridad eléctrica y terminología Rel ON/OFF.
+
+
 ## 1.2.2-prototype
 
 - Integración del firmware y documentación actual en main.

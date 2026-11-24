@@ -40,6 +40,7 @@ function chooseRole(role){
   if($('viewContext'))$('viewContext').textContent='Configurando '+(role==='TX'?'Emisor':'Receptor')+(role===connectedRole?' · Local':' · Remoto por LoRa');
   if($('directContext'))$('directContext').textContent='Wi-Fi conectado al '+(connectedRole==='TX'?'Emisor':'Receptor');
   if(lastStatus)paint(lastStatus);
+  updateSettingsVisibility();
   if(role!==connectedRole&&lastStatus?.paired&&!lastStatus.remote_known&&!remoteReadRequested){
     remoteReadRequested=true;
     post('/remote-read').then(refresh).catch(e=>{$('remoteState').textContent=e.message;remoteReadRequested=false;});
@@ -128,7 +129,7 @@ function telemetry(d){
   container.replaceChildren(...grouped.map((g,i)=>{
     const details=document.createElement('details');details.className='telemetry-group';details.open=i===0;
     const summary=document.createElement('summary');summary.textContent=g.heading+' · '+g.rows.length+' datos';
-    details.append(summary);const description=document.createElement('p');description.className='hint';description.textContent=g.help;details.append(description);
+    summary.title=g.help;details.append(summary);
     const table=document.createElement('table'),body=document.createElement('tbody');
     for(const [key,val] of g.rows){
       const tr=document.createElement('tr'),label=document.createElement('td'),value=document.createElement('td');
@@ -157,7 +158,7 @@ function paint(d){
   $('rain').textContent=known?(wet?'MOJADO':'SECO'):'Sin datos';
   $('source').textContent=known?(sim?'Control manual':'Sensor físico')+(local?'':' · LoRa'):'Pendiente de recepción';
   if($('relayMetricTitle'))$('relayMetricTitle').textContent=viewTx?'Control del sensor':'Relé / salida esperada';
-  $('relay').textContent=viewTx?(known?(sim?'MANUAL':'FÍSICO'):'Sin datos'):(known?(closed?'CERRADO':'ABIERTO'):'Sin datos');
+  $('relay').textContent=viewTx?(known?(sim?'MANUAL':'Sensor físico'):'Sin datos'):(known?(d.rx_active?'Rel ON':'Rel OFF'):'Sin datos');
   $('remaining').textContent=viewTx?(hostTx?(d.manual_feedback||'Sensor activo'):(d.management_pending?'Orden remota pendiente':d.remote_manual_pending?'Aplicada en emisor · ACK pendiente':d.remote_state_confirmed?'Último estado confirmado':'Última observación recibida')):(d.rx_restored?'Rearme manual pendiente':durationText(d.remaining_ms)+(local?'':' · último ACK'));
   if($('signalMetricTitle'))$('signalMetricTitle').textContent='RSSI '+(hostTx?(viewTx?'RX→TX':'TX→RX'):'TX→RX');
   const rssi=hostTx&&!viewTx?d.rx_rssi_dbm:d.rssi_dbm;
@@ -167,13 +168,21 @@ function paint(d){
   if($('contactInfo'))$('contactInfo').textContent=viewTx?(hostTx?'Lecturas del sensor local':'Última lectura del emisor comunicada por LoRa'):'Contacto '+(d.contact_nc?'NC':'NO')+' · '+(local?'Estado calculado local':'Última orden conocida')+' · Control '+(d.rx_armed?'habilitado':'deshabilitado')+' · sin realimentación física';
   $('radioNote').textContent=BigInt(d.duty_wait_ms||0)>0?'Radio en espera de presupuesto: '+Math.ceil(Number(d.duty_wait_ms)/1000)+' s. Los eventos pendientes se conservan.':'Últimas mediciones reales · SF'+d.sf+' · '+d.frequency_mhz+' MHz · '+d.airtime_ms+' ms por trama.';
   if($('viewStateTitle'))$('viewStateTitle').textContent=viewTx?'Estado del emisor':'Estado del relé';
-  if($('viewState'))$('viewState').textContent=known?(viewTx?(wet?'MOJADO':'SECO'):(closed?'CERRADO':'ABIERTO')):'Sin datos';
+  if($('viewState'))$('viewState').textContent=known?(viewTx?(wet?'MOJADO':'SECO'):(d.rx_active?'Rel ON':'Rel OFF')):'Sin datos';
   if($('viewStateAge'))$('viewStateAge').textContent=known?(local?'En este estado desde hace ':'Cambio observado hace ')+timeSince(elapsed):'Sin observaciones';
   if($('viewLink'))$('viewLink').textContent=fresh?'ENLACE OK':'SIN ENLACE';
   if($('viewLinkAge'))$('viewLinkAge').textContent='Último intercambio: '+timeSince(age);
   if($('viewCountTitle'))$('viewCountTitle').textContent=viewTx?'Estados / recepciones':'Recepciones en RX';
   if($('viewCount'))$('viewCount').textContent=packetCount===undefined||packetCount===null?'—':packetCount;
   if($('viewCountInfo'))$('viewCountInfo').textContent=local?'Contador local':'Última telemetría disponible';
+  if($('logsState'))$('logsState').textContent=d.log_enabled?'Disponible · '+(d.log_bytes||0)+' bytes':'Almacenamiento no preparado';
+  if($('logsPrepare'))$('logsPrepare').disabled=!!d.log_enabled;
+  if($('pairState'))$('pairState').textContent=d.paired?'Emparejamiento configurado · '+(d.pair_fingerprint||''): 'Emparejamiento pendiente';
+  if($('relayLocalState'))$('relayLocalState').textContent=d.rx_active?'Rel ON':'Rel OFF';
+  if($('relayLocalAge'))$('relayLocalAge').textContent='Desde hace '+timeSince(d.relay_state_age_ms);
+  if($('relayElectricalState'))$('relayElectricalState').textContent=d.relay_test?'PRUEBA':d.relay_output_high?'HIGH':'LOW';
+  if($('relayPinInfo'))$('relayPinInfo').textContent='GPIO '+(d.relay_pin??'—')+' · activación '+(d.relay_active_high?'HIGH':'LOW');
+  if($('relayTestButton'))$('relayTestButton').disabled=d.rx_armed||d.maintenance||d.relay_test;
   if($('sensorLive'))$('sensorLive').textContent='AO '+d.ao+' / 4095 · DO '+(d.do??'—')+' · '+(d.wet?'Mojado':'Seco')+(d.simulated?' (simulación)':'');
   if($('manualModeState'))$('manualModeState').textContent='Sensor '+(d.simulated?'DESACTIVADO · control manual':'ACTIVADO · lectura física')+' · '+(d.manual_feedback||'');
   for(const id of ['manualWet','manualDry'])if($(id))$(id).disabled=!d.prototype||!d.simulated;
@@ -253,6 +262,40 @@ if($('theme')){
     for(const [key,title,v] of [['h','Horas',n/3600000n],['m','Minutos',n/60000n%60n],['s','Segundos',n/1000n%60n],['ms','Milisegundos',n%1000n]]){const l=document.createElement('label');l.textContent=title;const i=document.createElement('input');i.type='text';i.inputMode='numeric';i.pattern='[0-9]+';i.required=true;i.dataset[key]='';i.value=String(v);l.append(i);grid.append(l);}field.append(grid);label.replaceWith(field);
   });
 }
+
+const configItems=[
+  ['localDevice',true],['memorySettings',true],['sensorSettings',true],
+  ['localAccess',true],['localPair',true],['logsSettings',true],['localUpdate',true],
+  ['remoteSensor',false],['remoteAccess',false]
+];
+function updateSettingsVisibility(){
+  if(!$('settingsBody'))return;
+  const local=selectedRole===connectedRole;
+  for(const [id,isLocal] of configItems){
+    const element=$(id);if(element&&element.parentNode===$('settingsBody')){
+      element.hidden=isLocal!==local;
+    }
+  }
+}
+function setupSettings(){
+  const target=$('settingsBody');if(!target)return;
+  for(const [id]of configItems){
+    const item=$(id);if(item&&item.parentNode)target.append(item);
+  }
+  $('settingsButton').addEventListener('click',()=>{updateSettingsVisibility();$('settingsDialog').showModal();});
+  $('settingsClose').addEventListener('click',()=>$('settingsDialog').close());
+  $('settingsDialog').addEventListener('click',e=>{if(e.target===$('settingsDialog'))$('settingsDialog').close();});
+  updateSettingsVisibility();
+}
+setupSettings();
+if($('relayTestButton'))$('relayTestButton').addEventListener('click',async()=>{
+  if(!lastStatus||lastStatus.rx_armed||lastStatus.maintenance)return;
+  const answer=prompt('Con la carga desconectada, escribe PROBAR para accionar la salida durante 2 segundos.');
+  if(answer!=='PROBAR')return;
+  try{$('notice').textContent=await post('/relay-test',{confirm:answer});await refresh();}
+  catch(e){$('notice').textContent=e.message;}
+});
+post('/time',{epoch_ms:String(Date.now())}).catch(()=>{});
 document.querySelectorAll('details.help').forEach(details=>{
   const summary=details.querySelector('summary'),message=details.querySelector('p').textContent;
   details.replaceWith(helpButton(message,summary.getAttribute('aria-label')||'Ayuda'));

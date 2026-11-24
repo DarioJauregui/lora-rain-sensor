@@ -25,7 +25,7 @@ bool (*managementApplyTest)(uint8_t)=nullptr; // Optional TX-only manual sensor 
 bool managementCanSend();
 void (*managementOnRx)()=nullptr;
 uint32_t managementOwnBoot=0;
-uint64_t mgCounter=0,mgLimit=0,mgSession=0,mgNext=0;
+uint64_t mgCounter=0,mgLimit=0,mgSession=0,mgNext=0,mgQueuedAt=0;
 uint32_t mgSequence=0,mgHighest=0,mgPeerRevision=0;
 RainFrame mgPending{},mgCached{};
 bool mgWaiting=false,mgHaveCache=false;
@@ -77,7 +77,7 @@ bool managementQueue(const ManagementData &data){
   mgPending=newFrame(7,localId(),managementOwnBoot,++mgSequence,0);
   if(!mgSequence){mgState="Contador agotado; reiniciar";return false;}mgPending.event=mgSequence;
   memcpy(mgPending.payload,&data,sizeof(data)); // RAM only; encrypted once a session is available.
-  mgWaiting=true;mgAttempts=0;mgNext=0;mgState="Pendiente de envio";return true;
+  mgWaiting=true;mgAttempts=0;mgNext=0;mgQueuedAt=uptimeMs();mgState="Pendiente de envio";return true;
 }
 void managementSnapshot(ManagementData &d){
   auto op=getOperational();memset(d.bytes,0,sizeof(d.bytes));memcpy(d.bytes,&op,sizeof(op));
@@ -125,10 +125,18 @@ bool managementProcess(const RainFrame &f){
 void managementTick(){
   if(!mgWaiting||coreMaintenance)return;
   uint64_t session=managementSession(),now=uptimeMs();
-  if(!session){mgState="Esperando dispositivo";return;}
+  if(mgQueuedAt&&now-mgQueuedAt>600000ULL){
+    mgWaiting=false;mgState="Sin confirmacion: operacion expirada";
+    memset(&mgPending,0,sizeof(mgPending));coreLogEvent("management_expired");return;
+  }
+  if(!session){
+    if(mgAttempts){mgWaiting=false;mgState="Sin confirmacion: sesion perdida";
+      memset(&mgPending,0,sizeof(mgPending));coreLogEvent("management_session_lost");return;}
+    mgState="Esperando dispositivo";return;
+  }
   if(now<mgNext||coreDutyWaitMs()||!managementCanSend())return;
   if(coreRole=="RX"&&mgPeerAsleep&&(!mgLastSeen||now-mgLastSeen>2000)){mgState="Esperando dispositivo";return;}
-  if(mgAttempts>=3){mgWaiting=false;mgState="Sin confirmacion";memset(&mgPending,0,sizeof(mgPending));return;}
+  if(mgAttempts>=3){mgWaiting=false;mgState="Sin confirmacion";memset(&mgPending,0,sizeof(mgPending));coreLogEvent("management_unconfirmed");return;}
   if(!mgAttempts){ManagementData d;memcpy(&d,mgPending.payload,sizeof(d));mgPending.session=session;
     if(!mgSeal(mgPending,d)){mgWaiting=false;mgState="Error criptografico";}memset(&d,0,sizeof(d));if(!mgWaiting)return;}
   if(mgPending.session!=session){mgWaiting=false;mgState="Sin confirmacion: sesion cambiada";return;}
@@ -151,6 +159,7 @@ void managementRoutes(){
     if(key.length()!=64){web.send(400,"text/plain","Se requieren 64 digitos hexadecimales");return;}
     for(int i=0;i<32;++i){char part[3]={key[2*i],key[2*i+1],0};char *end;bytes[i]=strtoul(part,&end,16);if(*end||!isxdigit(part[0])||!isxdigit(part[1])){web.send(400,"text/plain","Clave invalida");return;}}
     Preferences p;p.begin("raindevice",false);bool ok=p.putBytes("key",bytes,32)==32;p.end();memset(bytes,0,32);
+    if(ok)coreLogEvent("pair_key_changed");
     web.send(ok?200:500,"text/plain",ok?"Clave guardada. Reiniciando":"Error de memoria");if(ok)coreRebootAtMs=millis()+1000;
   });
   web.on("/access",HTTP_POST,[](){if(!corePostAllowed())return;String ssid=web.arg("ssid"),pass=web.arg("password");

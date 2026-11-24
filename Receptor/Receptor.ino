@@ -29,6 +29,8 @@ struct ControlGuard {
 rain::Pulse pulse;
 bool controlArmed=false, activeCoil=true, coilOn=false, haveState=false, lastRain=false, simulated=false;
 bool lastRelayActive=false;
+uint64_t relayTestUntilMs=0, lastRelaySelfTestMs=0, lastRadioProbeMs=0;
+bool relayTestRunning=false, loggedLinkLost=true, loggedRelayActive=false;
 bool sessionReady=false, commsLost=true;
 std::atomic<bool> persistDirty{false};
 uint8_t lossPolicy=rain::HOLD_OUTPUT;
@@ -41,10 +43,12 @@ float lastRssi=-150, lastSnr=-20;
 volatile bool rxInterrupt=false;
 
 void IRAM_ATTR onRadioReceive(){rxInterrupt=true;}
-void recordEvent(const char *event){Serial.printf("%llu %s\n",(unsigned long long)uptimeMs(),event);}
+void recordEvent(const char *event){Serial.printf("%llu %s\n",(unsigned long long)uptimeMs(),event);coreLogEvent(event);}
 void setPhysicalCoil(bool on){bool active=controlArmed&&haveState&&!coreMaintenance&&(on==activeCoil);if(lastRelayActive!=active)relayStateSinceMs=uptimeMs();lastRelayActive=active;coilOn=on;digitalWrite(PIN_RELAY_NPN,(on==bool(RAIN_RELAY_ACTIVE_HIGH))?HIGH:LOW);}
 // Caller holds controlMutex. All paths, including web and OTA, share this gate.
 void applyControl(){
+  if(relayTestRunning)return;
+  if(pulse.restored){setPhysicalCoil(false);return;}
   setPhysicalCoil(rain::outputCoil(coreMaintenance,controlArmed,haveState,commsLost,
                                  lossPolicy,pulse.active,activeCoil,coilOn));
 }
@@ -52,6 +56,7 @@ void controlTask(void *){
   for(;;){
     {ControlGuard lock;
       uint64_t now=uptimeMs();commsLost=!haveState||now-lastFresh>lossTimeoutMs;
+      if(relayTestRunning&&now>=relayTestUntilMs){relayTestRunning=false;setPhysicalCoil(false);}
       bool wasActive=pulse.active;
       if(!coreMaintenance&&!(commsLost&&lossPolicy==rain::HOLD_OUTPUT))pulse.tick(now,!commsLost);
       if(wasActive!=pulse.active)persistDirty=true;
@@ -67,7 +72,7 @@ struct __attribute__((packed)) ReceiverSettings {
   uint32_t event;
   uint8_t policy, loss, armed, active, polarity;
 };
-bool relayActive(){return controlArmed&&haveState&&!coreMaintenance&&(coilOn==activeCoil);}
+bool relayActive(){return controlArmed&&haveState&&!coreMaintenance&&!pulse.restored&&(coilOn==activeCoil);}
 bool persistSettings(){
   ReceiverSettings saved{};
   {ControlGuard lock;saved.magic=0x52585332;saved.duration=pulse.durationMs;saved.event=lastEvent;saved.policy=pulse.policy;
@@ -102,8 +107,30 @@ bool configureReceiver(uint32_t config,uint64_t duration,uint64_t timeout,bool r
   if(!persistSettings()){coreMaintenance=true;ControlGuard lock;setPhysicalCoil(false);return false;}
   return true;
 }
-String roleControlsHtml(){return "<section><h2>Control del receptor</h2><p class='hint'>La salida arranca desarmada en una instalación nueva. Una activación pendiente tras un reinicio requiere rearme manual.</p></section>"+pulseControls();}
+String roleControlsHtml(){
+  return "<section><h2>Control del relé</h2><div class='grid'>"
+    "<div class='metric'><span>Accionamiento lógico</span><b id='relayLocalState'>—</b><small id='relayLocalAge'>—</small></div>"
+    "<div class='metric'><span>Salida GPIO</span><b id='relayElectricalState'>—</b><small id='relayPinInfo'>—</small></div>"
+    "</div><div class='actions'><button id='relayTestButton' type='button'>Probar salida (2 s)</button></div>"
+    "<small>Prueba local con control automático deshabilitado y carga desconectada. "
+    "Requiere confirmación PROBAR. La salida indica la orden GPIO sin realimentación eléctrica.</small></section>"
+    +pulseControls();
+}
 void configureRoleRoutes(){
+  web.on("/relay-test",HTTP_POST,[](){
+    if(!corePostAllowed())return;
+    if(web.arg("confirm")!="PROBAR"){web.send(400,"text/plain","Confirmación requerida: PROBAR");return;}
+    bool ok=false;
+    {ControlGuard lock;
+      const uint64_t now=uptimeMs();
+      if(!controlArmed&&!coreMaintenance&&!relayTestRunning&&(now-lastRelaySelfTestMs>10000||!lastRelaySelfTestMs)){
+        lastRelaySelfTestMs=now;relayTestRunning=true;relayTestUntilMs=now+2000;
+        setPhysicalCoil(true);ok=true;
+      }
+    }
+    if(ok)recordEvent("relay_test");
+    web.send(ok?202:409,"text/plain",ok?"Prueba GPIO activa durante 2 s":"Deshabilita el control automático o espera a que termine la prueba");
+  });
   web.on("/receiver",HTTP_POST,[](){
     if(!corePostAllowed())return;uint64_t armed,policy,loss,polarity,seconds,duration;
     if(!readUnsigned("armed",armed)||!readUnsigned("policy",policy)||!readUnsigned("loss",loss)||!readUnsigned("polarity",polarity)||
@@ -128,6 +155,8 @@ String getStatusJson(){
     ",\"rx_restored\":"+String(pulse.restored?"true":"false")+",\"rx_maintenance\":"+String(coreMaintenance?"true":"false")+
     ",\"remaining_ms\":\""+u64(pulse.remaining(uptimeMs()))+"\",\"pulse_ms\":\""+u64(pulse.durationMs)+"\""+
     ",\"policy\":"+String(pulse.policy)+",\"loss\":"+String(lossPolicy)+",\"polarity\":"+String(activeCoil?1:0)+",\"loss_seconds\":"+u64(lossTimeoutMs/1000)+
+    ",\"relay_test\":"+String(relayTestRunning?"true":"false")+",\"relay_output_high\":"+String(digitalRead(PIN_RELAY_NPN)==HIGH?"true":"false")+
+    ",\"relay_active_high\":"+String(RAIN_RELAY_ACTIVE_HIGH?"true":"false")+
     ",\"rx_packets\":"+String(rxCount)+",\"duplicates\":"+String(duplicates)+",\"auth_rejects\":"+String(authRejects)+
     ",\"sf\":"+String(LORA_SF)+",\"frequency_mhz\":"+String(LORA_FREQUENCY_MHZ,1)+coreStatusFields()+"}";
 }
@@ -182,7 +211,7 @@ void processReceived(){
 }
 void setup(){
   digitalWrite(PIN_RELAY_NPN,RAIN_RELAY_ACTIVE_HIGH?LOW:HIGH);pinMode(PIN_RELAY_NPN,OUTPUT);relayStateSinceMs=uptimeMs();
-  Serial.begin(115200);coreRole="RX";coreLoadDevice();loadSettings();
+  Serial.begin(115200);coreRole="RX";coreLoadDevice();loadSettings();coreInitLog();
   controlMutex=xSemaphoreCreateMutex();if(!controlMutex)while(true)delay(1000);
   if(xTaskCreate(controlTask,"relay",4096,nullptr,2,nullptr)!=pdPASS){coreMaintenance=true;while(true)delay(1000);}
   coreInitDisplay();ownBoot=esp_random();managementOwnBoot=ownBoot;managementOnRx=onRadioReceive;
@@ -191,11 +220,23 @@ void setup(){
 }
 void loop(){
   coreTickPortal();processReceived();managementTick();
+  const uint64_t radioNow=uptimeMs();
+  bool hasRecent=false, lostNow=true, relayNow=false;
+  {ControlGuard lock;hasRecent=haveState;lostNow=commsLost;relayNow=lastRelayActive;}
+  if(hasRecent&&lostNow&&!loggedLinkLost){loggedLinkLost=true;recordEvent("link_lost");}
+  if(hasRecent&&!lostNow&&loggedLinkLost){loggedLinkLost=false;recordEvent("link_restored");}
+  if(relayNow!=loggedRelayActive){loggedRelayActive=relayNow;recordEvent(relayNow?"relay_on":"relay_off");}
+  if(!coreMaintenance&&!coreOtaInProgress&&
+     (!hasRecent?radioNow>180000:lostNow&&radioNow-lastFresh>180000)&&
+     radioNow-lastRadioProbeMs>180000){
+    lastRadioProbeMs=radioNow;
+    coreRecoverRadio(onRadioReceive,"RX without fresh LoRa state");
+  }
   if(persistDirty&&!persistSettings()){coreMaintenance=true;ControlGuard lock;setPhysicalCoil(false);}
   static uint64_t lastScreen=0;uint64_t now=uptimeMs();
   if(now-lastScreen>=1000){lastScreen=now;
     if(coreApActive&&now<30000)coreDisplayPortalIfNeeded();else {
-      ControlGuard lock;coreQuality=rain::quality(lastRssi,lastSnr,!commsLost,rxCount,rxCount);coreTimer=pulse.active&&!pulse.restored?"Temp "+compactTime(pulse.remaining(now)):"Temp --";coreScreen("LoraRainSensor RX",rain::contactClosed(CONTACT_NC,coilOn)?"RELE CERRADO":"RELE ABIERTO",String(lastRain?"MOJADO":"SECO")+(simulated?" MAN":" FIS"),commsLost?"SIN ENLACE":"ENLACE OK",
+      ControlGuard lock;coreQuality=rain::quality(lastRssi,lastSnr,!commsLost,rxCount,rxCount);coreTimer=pulse.active&&!pulse.restored?"Temp "+compactTime(pulse.remaining(now)):"Temp --";coreScreen("LoraRainSensor RX",rain::contactClosed(CONTACT_NC,coilOn)?"RELE CERRADO":"RELE ABIERTO",String(lastRain?"MOJADO":"SECO")+(simulated?" MAN":" SENSOR"),commsLost?"SIN ENLACE":"ENLACE OK",
         String("Rel ")+(relayActive()?"ON ":"OFF ")+stateAge(now-relayStateSinceMs),coreTimer);}}
   delay(1);
 }
