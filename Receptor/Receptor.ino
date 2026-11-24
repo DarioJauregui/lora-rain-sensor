@@ -30,7 +30,7 @@ rain::Pulse pulse;
 bool controlArmed=false, activeCoil=true, coilOn=false, haveState=false, lastRain=false, simulated=false;
 bool lastRelayActive=false;
 uint64_t relayTestUntilMs=0, lastRelaySelfTestMs=0, lastRadioProbeMs=0;
-bool relayTestRunning=false, loggedLinkLost=true;
+bool relayTestRunning=false, loggedLinkLost=true, loggedRelayActive=false;
 bool sessionReady=false, commsLost=true;
 std::atomic<bool> persistDirty{false};
 uint8_t lossPolicy=rain::HOLD_OUTPUT;
@@ -48,6 +48,7 @@ void setPhysicalCoil(bool on){bool active=controlArmed&&haveState&&!coreMaintena
 // Caller holds controlMutex. All paths, including web and OTA, share this gate.
 void applyControl(){
   if(relayTestRunning)return;
+  if(pulse.restored){setPhysicalCoil(false);return;}
   setPhysicalCoil(rain::outputCoil(coreMaintenance,controlArmed,haveState,commsLost,
                                  lossPolicy,pulse.active,activeCoil,coilOn));
 }
@@ -71,7 +72,7 @@ struct __attribute__((packed)) ReceiverSettings {
   uint32_t event;
   uint8_t policy, loss, armed, active, polarity;
 };
-bool relayActive(){return controlArmed&&haveState&&!coreMaintenance&&(coilOn==activeCoil);}
+bool relayActive(){return controlArmed&&haveState&&!coreMaintenance&&!pulse.restored&&(coilOn==activeCoil);}
 bool persistSettings(){
   ReceiverSettings saved{};
   {ControlGuard lock;saved.magic=0x52585332;saved.duration=pulse.durationMs;saved.event=lastEvent;saved.policy=pulse.policy;
@@ -220,10 +221,13 @@ void setup(){
 void loop(){
   coreTickPortal();processReceived();managementTick();
   const uint64_t radioNow=uptimeMs();
-  if(haveState&&commsLost&&!loggedLinkLost){loggedLinkLost=true;recordEvent("link_lost");}
-  if(haveState&&!commsLost&&loggedLinkLost){loggedLinkLost=false;recordEvent("link_restored");}
+  bool hasRecent=false, lostNow=true, relayNow=false;
+  {ControlGuard lock;hasRecent=haveState;lostNow=commsLost;relayNow=lastRelayActive;}
+  if(hasRecent&&lostNow&&!loggedLinkLost){loggedLinkLost=true;recordEvent("link_lost");}
+  if(hasRecent&&!lostNow&&loggedLinkLost){loggedLinkLost=false;recordEvent("link_restored");}
+  if(relayNow!=loggedRelayActive){loggedRelayActive=relayNow;recordEvent(relayNow?"relay_on":"relay_off");}
   if(!coreMaintenance&&!coreOtaInProgress&&
-     (!haveState?radioNow>180000:commsLost&&radioNow-lastFresh>180000)&&
+     (!hasRecent?radioNow>180000:lostNow&&radioNow-lastFresh>180000)&&
      radioNow-lastRadioProbeMs>180000){
     lastRadioProbeMs=radioNow;
     coreRecoverRadio(onRadioReceive,"RX without fresh LoRa state");

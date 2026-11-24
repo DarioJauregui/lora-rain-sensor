@@ -378,7 +378,7 @@ void loop() {
   if(!coreMaintenance&&now-lastBattery>=30000){lastBattery=now;readBattery();}
   if(recording&&now-lastRecordSnapshot>=1000){lastRecordSnapshot=now;recordEvent("sample");}
   if(now-lastScreen>=1000){lastScreen=now;coreQuality=rain::quality(lastRssi,lastSnr,linkOk(),ackedStates,sentStates);
-    if(coreApActive&&now<30000)coreDisplayPortalIfNeeded();else coreScreen("LoraRainSensor TX",String(wetNow()?"MOJADO":"SECO")+"|AO "+String(analogRain),sensorInput.manual?"MANUAL":"FISICO",
+    if(coreApActive&&now<30000)coreDisplayPortalIfNeeded();else coreScreen("LoraRainSensor TX",String(wetNow()?"MOJADO":"SECO")+"|AO "+String(analogRain),sensorInput.manual?"MANUAL":"SENSOR FISICO",
       (sensorInput.pending?"ACK pendiente":linkOk()?"ACK OK":"SIN ACK")+(lastAck?" "+compactTime(now-lastAck):String("")),
       rxKnown?String("Rel ")+(remoteRelayActive?"ON ":"OFF ")+stateAge(now-remoteContactObservedSinceMs):String("Rel --"),"");}
   if((!lastAck||now-lastAck>2000)&&!coreRebootAtMs&&!mgWaiting&&!corePrototype&&!coreApActive&&!coreMaintenance&&!recording&&!awaitingAck&&

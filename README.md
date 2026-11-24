@@ -26,7 +26,9 @@ Firmware de emisor y receptor para **Heltec WiFi LoRa 32 V3**, con portal Wi-Fi,
 | [LoraRainSensor-Emisor.bin](https://github.com/DarioJauregui/lora-rain-sensor/releases/download/v1.2.3-prototype/LoraRainSensor-Emisor.bin) | Emisor, AO GPIO4; DO opcional GPIO2 |
 | [LoraRainSensor-Receptor-NO.bin](https://github.com/DarioJauregui/lora-rain-sensor/releases/download/v1.2.3-prototype/LoraRainSensor-Receptor-NO.bin) | Receptor, mando **GPIO5**, contacto COM-NO |
 | [LoraRainSensor-Receptor-NC.bin](https://github.com/DarioJauregui/lora-rain-sensor/releases/download/v1.2.3-prototype/LoraRainSensor-Receptor-NC.bin) | Receptor, mando **GPIO5**, contacto COM-NC |
-| [SHA256SUMS.txt](https://github.com/DarioJauregui/lora-rain-sensor/releases/download/v1.2.3-prototype/SHA256SUMS.txt) | Integridad de las tres imágenes |
+| [LoraRainSensor-Receptor-GPIO2-HIGH-NO.bin](https://github.com/DarioJauregui/lora-rain-sensor/releases/download/v1.2.3-prototype/LoraRainSensor-Receptor-GPIO2-HIGH-NO.bin) | Receptor GPIO2, contacto NO, entrada de relé activa en HIGH |
+| [LoraRainSensor-Receptor-GPIO2-LOW-NO.bin](https://github.com/DarioJauregui/lora-rain-sensor/releases/download/v1.2.3-prototype/LoraRainSensor-Receptor-GPIO2-LOW-NO.bin) | Receptor GPIO2, contacto NO, entrada de relé activa en LOW |
+| [SHA256SUMS.txt](https://github.com/DarioJauregui/lora-rain-sensor/releases/download/v1.2.3-prototype/SHA256SUMS.txt) | Integridad de las cinco imágenes |
 
 Actualizar **ambos nodos**. Son imágenes de aplicación para OTA o dirección USB `0x10000`, con las particiones de 8 MB por defecto de la placa. No son imágenes completas de flash. Elegir el archivo correspondiente al rol y al contacto cableado. La variante GPIO2 de 1.2.1 queda como antecedente; las imágenes actuales de receptor utilizan GPIO5.
 
