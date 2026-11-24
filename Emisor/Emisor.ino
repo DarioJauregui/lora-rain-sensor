@@ -27,7 +27,7 @@ uint32_t helloBackoff=15000, attempts=0, sentStates=0, ackedStates=0, retries=0,
 float lastRssi=-150, lastSnr=-20, remoteRssi=-150, remoteSnr=-20;
 uint64_t lastRtt=0, txStarted=0;
 RainFrame pendingFrame{}, receiver{};
-bool pending=false, awaitingAck=false, rxKnown=false;
+bool pending=false, awaitingAck=false, rxKnown=false,receiverSimulated=false;
 bool configPending=false, resetPending=false;
 bool forceStateAfterAck=false, remoteRelayActive=false;
 uint64_t sensorStateSinceMs=0, remoteContactObservedSinceMs=0;
@@ -257,7 +257,7 @@ String getStatusJson() {
     ",\"acked_states\":"+String(ackedStates)+",\"sent_states\":"+String(sentStates)+",\"retries\":"+String(retries)+",\"ack_timeouts\":"+String(ackTimeouts)+
     ",\"auth_rejects\":"+String(authRejects)+",\"event_pending\":"+String(rainEvent.pending?"true":"false")+
     ",\"config_pending\":"+String(configPending||resetPending?"true":"false")+",\"rx_known\":"+String(rxKnown?"true":"false")+
-    ",\"rx_wet\":"+String(receiver.wet?"true":"false")+
+    ",\"rx_simulated\":"+String(receiverSimulated?"true":"false")+",\"rx_wet\":"+String(receiver.wet?"true":"false")+
     ",\"rx_active\":"+String(receiver.flags&ACK_ACTIVE?"true":"false")+
     ",\"rx_armed\":"+String(receiver.flags&ACK_RELAY_ARMED?"true":"false")+",\"rx_coil\":"+String(receiver.flags&ACK_COIL_ON?"true":"false")+
     ",\"rx_maintenance\":"+String(receiver.flags&ACK_MAINTENANCE?"true":"false")+",\"rx_restored\":"+String(receiver.config&32?"true":"false")+
@@ -287,7 +287,7 @@ void processReceived() {
       remoteRelayActive=f.flags&ACK_ACTIVE;
       remoteContactObservedSinceMs=lastAck;
     }
-    if(pendingFrame.type==FRAME_STATE){if(!(f.flags&ACK_REJECTED))++ackedStates;
+    if(pendingFrame.type==FRAME_STATE){if(!(f.flags&ACK_REJECTED)){++ackedStates;receiverSimulated=pendingFrame.flags&STATE_SIMULATED;}
       if(!(f.flags&ACK_REJECTED)&&rainEvent.acknowledge(f.event)){if(!saveEvent())rainEvent.pending=true;}
       if(pendingFrame.wet==wetNow()&&bool(pendingFrame.flags&STATE_SIMULATED)==sensorInput.manual&&sensorInput.acknowledge(pendingSensorRevision,f.flags&ACK_REJECTED)){
         manualFeedback=String("ACK confirmado: ")+(wetNow()?"MOJADO":"SECO")+(sensorInput.manual?" manual":" fisico");
@@ -377,7 +377,7 @@ void loop() {
 uint64_t managementSession(){return sessionId;}
 void managementRxAction(){queueState();}
 void requestLink(){queueState();}
-Operational getOperational(){Operational op{};op.sampleMs=testSampleMs;op.confirmMs=confirmMs;op.heartbeatMs=heartbeatMs;op.sleepMs=sleepMs;op.on=rainOnThreshold;op.off=rainOffThreshold;op.prototype=corePrototype;op.display=coreDisplayEnabled;op.doWake=doWakeEnabled;op.role=1;op.uptime=uptimeMs();op.freeHeap=ESP.getFreeHeap();op.ao=analogRain;op.battery=batteryMv;op.doLevel=doLevel;op.wet=wetNow();op.simulated=sensorInput.manual;op.reserved=sensorInput.pending?1:0;op.rxPackets=ackedStates;op.txPackets=coreTxCount;op.errors=authRejects+coreTxErrors;return op;}
+Operational getOperational(){Operational op{};op.sampleMs=testSampleMs;op.confirmMs=confirmMs;op.heartbeatMs=heartbeatMs;op.sleepMs=sleepMs;op.on=rainOnThreshold;op.off=rainOffThreshold;op.prototype=corePrototype;op.display=coreDisplayEnabled;op.doWake=doWakeEnabled;op.role=1;op.uptime=uptimeMs();op.freeHeap=ESP.getFreeHeap();op.ao=analogRain;op.battery=batteryMv;op.doLevel=doLevel;op.wet=wetNow();op.simulated=sensorInput.manual;op.reserved=(sensorInput.pending?1:0)|(!sensorInput.pending&&ackedStates?2:0);op.rxPackets=ackedStates;op.txPackets=coreTxCount;op.errors=authRejects+coreTxErrors;return op;}
 bool applyOperational(const Operational &op){
   if(op.role!=1||op.sampleMs<10||op.sampleMs>60000||op.confirmMs>60000||op.heartbeatMs<1000||op.heartbeatMs>86400000||op.sleepMs<1000||op.sleepMs>86400000||op.on>3900||op.off>4095||op.off<=op.on||op.prototype>1||op.doWake>1)return false;
   // Whole operational update is one NVS entry; loaded atomically after restart.

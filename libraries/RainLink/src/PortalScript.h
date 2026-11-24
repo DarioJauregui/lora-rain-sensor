@@ -146,7 +146,7 @@ function paint(d){
   const age=d.ack_age_ms,fresh=d.link_ok===true;
   const known=local||(viewTx?(d.remote_known||age!==null):!!d.rx_known);
   const wet=viewTx?(hostTx?!!d.wet:(d.remote_known?!!d.remote_wet:!!d.wet)):(hostTx?!!d.rx_wet:!!d.wet);
-  const sim=viewTx?(hostTx?!!d.simulated:(d.remote_known?!!d.remote_simulated:!!d.simulated)):(hostTx?!!d.simulated:!!d.simulated);
+  const sim=viewTx?(hostTx?!!d.simulated:(d.remote_known?!!d.remote_simulated:!!d.simulated)):(hostTx?!!d.rx_simulated:!!d.simulated);
   const closed=d.contact_nc?!d.rx_coil:!!d.rx_coil;
   const elapsed=viewTx?(hostTx?d.state_age_ms:d.wet_state_age_ms):(hostTx?d.rx_state_observed_ms:d.relay_state_age_ms);
   const packetCount=viewTx?(hostTx?d.acked_states:(d.remote_known?d.remote_tx_packets:d.rx_packets)):(hostTx?(d.remote_known?d.remote_rx_packets:null):d.rx_packets);
@@ -158,7 +158,7 @@ function paint(d){
   $('source').textContent=known?(sim?'Control manual':'Sensor físico')+(local?'':' · LoRa'):'Pendiente de recepción';
   if($('relayMetricTitle'))$('relayMetricTitle').textContent=viewTx?'Control del sensor':'Relé / salida esperada';
   $('relay').textContent=viewTx?(known?(sim?'MANUAL':'FÍSICO'):'Sin datos'):(known?(closed?'CERRADO':'ABIERTO'):'Sin datos');
-  $('remaining').textContent=viewTx?(hostTx?(d.manual_feedback||'Sensor activo'):(d.management_pending?'Orden remota pendiente':d.remote_manual_pending?'Aplicada en emisor · ACK pendiente':d.remote_known?'Último estado confirmado':'Última observación recibida')):(d.rx_restored?'Rearme manual pendiente':durationText(d.remaining_ms)+(local?'':' · último ACK'));
+  $('remaining').textContent=viewTx?(hostTx?(d.manual_feedback||'Sensor activo'):(d.management_pending?'Orden remota pendiente':d.remote_manual_pending?'Aplicada en emisor · ACK pendiente':d.remote_state_confirmed?'Último estado confirmado':'Última observación recibida')):(d.rx_restored?'Rearme manual pendiente':durationText(d.remaining_ms)+(local?'':' · último ACK'));
   if($('signalMetricTitle'))$('signalMetricTitle').textContent='RSSI '+(hostTx?(viewTx?'RX→TX':'TX→RX'):'TX→RX');
   const rssi=hostTx&&!viewTx?d.rx_rssi_dbm:d.rssi_dbm;
   const snr=hostTx&&!viewTx?d.rx_snr_db:d.snr_db;
@@ -180,9 +180,10 @@ function paint(d){
   const remoteManual=!!d.remote_simulated,remoteReady=!!d.remote_known&&!!d.remote_prototype&&!d.management_pending;
   for(const id of ['remoteManualWet','remoteManualDry'])if($(id))$(id).disabled=!remoteReady||!remoteManual;
   for(const id of ['remoteManualEnable','remoteManualDisable'])if($(id))$(id).disabled=!d.remote_known||!d.remote_prototype||!!d.management_pending;
+  const remoteFailure=/Rechazada|Sin confirmacion|Error/.test(d.management_state||'');
   if($('remoteManualState'))$('remoteManualState').textContent=d.management_pending?'Orden pendiente de confirmación del emisor':
-    !d.remote_known?'Consulta pendiente: modo desconocido':(remoteManual?'Sensor DESACTIVADO · control manual':'Sensor ACTIVADO · lectura física')+
-    (d.remote_manual_pending?' · Aplicado en emisor; esperando estado LoRa / ACK':' · Último estado confirmado');
+    remoteFailure?d.management_state+' · consultar el emisor para verificar':!d.remote_known?'Consulta pendiente: modo desconocido':(remoteManual?'Sensor DESACTIVADO · control manual':'Sensor ACTIVADO · lectura física')+
+    (d.remote_manual_pending?' · Aplicado en emisor; esperando estado LoRa / ACK':d.remote_state_confirmed?' · Último estado confirmado':' · Estado consultado; sin ACK de estado');
   if($('manualEnable'))$('manualEnable').disabled=!d.prototype;
   if($('manualDisable'))$('manualDisable').disabled=!d.prototype;
   if($('remoteState'))$('remoteState').textContent=(d.management_state||'Sin operaciones')+(d.remote_ssid?' · SSID remoto: '+d.remote_ssid:'')+' · Última consulta: '+timeSince(d.remote_last_reply_age_ms);

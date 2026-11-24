@@ -127,7 +127,7 @@ void managementTick(){
 }
 String jsonEscape(String v){v.replace("\\","\\\\");v.replace("\"","\\\"");return v;}
 String managementStatus(){
-  return ",\"management_pending\":"+String(mgWaiting?"true":"false")+",\"remote_manual_pending\":"+String(mgPeer.reserved&1?"true":"false")+",\"paired\":"+String(corePaired?"true":"false")+",\"ssid\":\""+jsonEscape(coreApSsid)+"\",\"management_state\":\""+mgState+"\",\"remote_ssid\":\""+jsonEscape(mgPeerSsid)+"\",\"remote_known\":"+String(mgPeerKnown?"true":"false")+
+  return ",\"remote_state_confirmed\":"+String(mgPeer.reserved&2?"true":"false")+",\"management_pending\":"+String(mgWaiting?"true":"false")+",\"remote_manual_pending\":"+String(mgPeer.reserved&1?"true":"false")+",\"paired\":"+String(corePaired?"true":"false")+",\"ssid\":\""+jsonEscape(coreApSsid)+"\",\"management_state\":\""+mgState+"\",\"remote_ssid\":\""+jsonEscape(mgPeerSsid)+"\",\"remote_known\":"+String(mgPeerKnown?"true":"false")+
     ",\"remote_wet\":"+String(mgPeer.wet?"true":"false")+",\"remote_simulated\":"+String(mgPeer.simulated?"true":"false")+
     ",\"remote_last_reply_age_ms\":"+(mgLastReply?"\""+u64(uptimeMs()-mgLastReply)+"\"":String("null"))+
     ",\"remote_sample\":"+String(mgPeer.sampleMs)+",\"remote_confirm_ms\":"+String(mgPeer.confirmMs)+",\"remote_heartbeat_ms\":"+String(mgPeer.heartbeatMs)+",\"remote_sleep_ms\":"+String(mgPeer.sleepMs)+

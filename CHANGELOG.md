@@ -4,7 +4,7 @@
 
 - Integración del firmware y documentación actual en main.
 - Vistas separadas TX/RX, fondos por dispositivo, selector fijo y ayudas táctiles; telemetría sin cierres en cada refresco.
-- Control manual con revisión por orden, repetición de estados y ACK ligado al estado enviado; retorno inmediato a lectura física. Las respuestas de administración devuelven el modo aplicado y distinguen aplicación de recepción del estado.
+- Control manual con revisión por orden, repetición de estados y ACK ligado al estado enviado; retorno inmediato a lectura física. Las respuestas de administración devuelven el modo aplicado y distinguen aplicación de recepción del estado. Un estado HTTP antiguo no puede sobrescribir otro más reciente.
 - Eventos específicos de modo y órdenes en el CSV existente; sin cambiar sus columnas.
 - OLED con AO alineado, antigüedad de ACK, activación lógica y tiempos de estado; temporizador RX o `Temp --`.
 - Receptor GPIO5, imágenes NO y NC. Pruebas de regresión y publicación desde main sin sobrescribir versiones existentes.

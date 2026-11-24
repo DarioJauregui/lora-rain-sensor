@@ -29,7 +29,7 @@ main{max-width:960px;margin:auto;padding:20px}header{display:flex;align-items:ba
 h1{font-size:21px;margin:0}h2{font-size:16px;margin:0 0 14px}small,.hint{color:var(--muted);font-size:12px}
 section,details{scroll-margin-top:110px;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:18px;margin:16px 0}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}.metric{padding:14px;background:var(--metric);border-radius:7px}
-.metric b{font-size:23px;display:block;margin-top:6px}.metric span{font-size:12px;color:var(--muted)}
+.metric small{display:block}.metric b{font-size:23px;display:block;margin-top:6px}.metric span{font-size:12px;color:var(--muted)}
 .actions{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin-top:12px}label{display:flex;flex-direction:column;gap:5px;font-size:13px}
 input,select,button,.button{font:inherit;border-radius:6px;border:1px solid #b9c8d1;padding:9px;background:var(--field);color:var(--ink);min-height:42px}
 input{max-width:100%;width:100%}button,.button{cursor:pointer;text-decoration:none;display:inline-block}button.primary{background:var(--accent);color:white;border-color:var(--accent)}

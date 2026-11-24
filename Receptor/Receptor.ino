@@ -170,7 +170,7 @@ void processReceived(){
     highestSeq=f.seq;lastFresh=uptimeMs();mgLastSeen=lastFresh;mgPeerAsleep=f.flags&4;
     if(!haveState||lastRain!=(f.wet!=0))wetStateSinceMs=lastFresh;
     haveState=true;commsLost=false;lastRain=f.wet;simulated=f.flags&STATE_SIMULATED;
-    if(mgPeerKnown&&mgPeer.wet==lastRain&&mgPeer.simulated==simulated)mgPeer.reserved&=~1;
+    if(mgPeerKnown&&mgPeer.wet==lastRain&&mgPeer.simulated==simulated)mgPeer.reserved=(mgPeer.reserved&~1)|2;
     if(mgPeerKnown&&!(mgPeer.reserved&1)){mgPeer.wet=lastRain;mgPeer.simulated=simulated;mgPeer.ao=f.ao;}
     lastAO=f.ao;lastBatteryMv=f.batteryMv;lastRssi=radio.getRSSI();lastSnr=radio.getSNR();++rxCount;
     bool event=f.event&&f.event!=lastEvent;bool wasActive=pulse.active;
