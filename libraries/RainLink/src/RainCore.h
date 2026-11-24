@@ -429,6 +429,15 @@ void coreHandleUpload() {
 
 void coreConfigureWeb() {
   managementRoutes();
+  web.on("/logs/prepare",HTTP_POST,[](){
+    if(!corePostAllowed())return;
+    if(coreLogReady){web.send(409,"text/plain","Memoria ya preparada");return;}
+    if(web.arg("confirm")!="BORRAR MEMORIA"){web.send(400,"text/plain","Confirmación requerida: BORRAR MEMORIA");return;}
+    const bool ok=LittleFS.format();
+    if(ok)coreInitLog();
+    web.send(coreLogReady?200:500,"text/plain",coreLogReady?"Memoria preparada. Reiniciando":"Error al preparar memoria");
+    if(coreLogReady)coreRebootAtMs=millis()+1500;
+  });
   web.on("/time",HTTP_POST,[](){
     if(!corePostAllowed())return;uint64_t epoch;
     if(!readUnsigned("epoch_ms",epoch)||epoch<1577836800000ULL||epoch>4102444800000ULL){web.send(400,"text/plain","Marca temporal UTC invalida");return;}

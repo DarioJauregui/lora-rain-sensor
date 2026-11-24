@@ -9,7 +9,7 @@ Firmware de emisor y receptor para **Heltec WiFi LoRa 32 V3**, con portal Wi-Fi,
 - Diagnóstico del relé: estado lógico Rel ON/OFF, pin GPIO real y nivel eléctrico; prueba local de 2 segundos con confirmación y control automático deshabilitado.
 - Variantes RX GPIO5 (NO/NC) y GPIO2 (NO, módulo activo en HIGH o LOW). NO/NC indica el contacto; HIGH/LOW indica la polaridad eléctrica de la señal de mando.
 - Recuperación del controlador LoRa tras pérdida prolongada, sin reiniciar compulsivamente ni cambiar las claves. Operaciones remotas bloqueadas se cancelan con causa registrada.
-- Registro circular en LittleFS: dos segmentos de 16 KiB por placa, descarga autenticada en `/logs.csv`. Fecha UTC cuando el reloj ha sido sincronizado; contador monotónico de arranque siempre.
+- Registro circular en LittleFS: dos segmentos de 16 KiB por placa, descarga autenticada en `/logs.csv`. Si LittleFS no está preparado, inicializarlo desde Configuración requiere confirmación expresa y elimina archivos de esa partición. Fecha UTC cuando el reloj ha sido sincronizado; contador monotónico de arranque siempre.
 - El portal sincroniza la hora desde el navegador y muestra un identificador no secreto de la clave local para comparar la configuración entre placas.
 
 **Nota eléctrica:** ver el nivel activo del módulo y conectar tierra común. Las GPIO del ESP32-S3 son de 3,3 V. Las señales HIGH/LOW no verifican la tensión sobre la bobina ni el estado físico del contacto.

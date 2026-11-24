@@ -175,6 +175,8 @@ function paint(d){
   if($('viewCountTitle'))$('viewCountTitle').textContent=viewTx?'Estados / recepciones':'Recepciones en RX';
   if($('viewCount'))$('viewCount').textContent=packetCount===undefined||packetCount===null?'—':packetCount;
   if($('viewCountInfo'))$('viewCountInfo').textContent=local?'Contador local':'Última telemetría disponible';
+  if($('logsState'))$('logsState').textContent=d.log_enabled?'Disponible · '+(d.log_bytes||0)+' bytes':'Almacenamiento no preparado';
+  if($('logsPrepare'))$('logsPrepare').disabled=!!d.log_enabled;
   if($('pairState'))$('pairState').textContent=d.paired?'Emparejamiento configurado · '+(d.pair_fingerprint||''): 'Emparejamiento pendiente';
   if($('relayLocalState'))$('relayLocalState').textContent=d.rx_active?'Rel ON':'Rel OFF';
   if($('relayLocalAge'))$('relayLocalAge').textContent='Desde hace '+timeSince(d.relay_state_age_ms);
@@ -263,7 +265,7 @@ if($('theme')){
 
 const configItems=[
   ['localDevice',true],['memorySettings',true],['sensorSettings',true],
-  ['localAccess',true],['localPair',true],['localUpdate',true],
+  ['localAccess',true],['localPair',true],['logsSettings',true],['localUpdate',true],
   ['remoteSensor',false],['remoteAccess',false]
 ];
 function updateSettingsVisibility(){

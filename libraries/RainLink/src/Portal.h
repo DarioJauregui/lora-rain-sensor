@@ -93,6 +93,13 @@ table{width:100%;border-collapse:collapse;font-size:13px}td{padding:7px;border-b
 <div class="metric"><span>Comunicación LoRa</span><b id="viewLink">—</b><small id="viewLinkAge">—</small></div>
 <div class="metric"><span id="viewCountTitle">Confirmaciones</span><b id="viewCount">—</b><small id="viewCountInfo">—</small></div></div></section>
 <details id="telemetry"><summary>Telemetría completa </summary><div id="data"></div></details>
+<details id="logsSettings"><summary>Registro de diagnóstico</summary>
+<p id="logsState">Comprobando almacenamiento</p>
+<div class="actions"><a class="button" href="/logs.csv" download>Descargar registros CSV</a></div>
+<form action="/logs/prepare" data-save>
+<p class="hint">Solo si el almacenamiento no está preparado. Inicializar borra los archivos de LittleFS, incluido cualquier registro de pruebas CSV. Conserva los ajustes NVS.</p>
+<label>Confirmación<input name="confirm" placeholder="BORRAR MEMORIA" required></label>
+<button id="logsPrepare">Inicializar almacenamiento</button></form></details>
 <details id="localUpdate"><summary>Actualizar firmware de __DEVICE__ · Wi-Fi directo</summary><form method="POST" enctype="multipart/form-data" action="/update?token=__TOKEN__">
 <p class="hint">Archivo .bin de este rol. El receptor mantiene la salida desenergizada durante mantenimiento. Si la carga falla, reinicia para recuperar el servicio.</p>
 <input type="file" name="firmware" accept=".bin" required><button>Actualizar</button></form></details>
