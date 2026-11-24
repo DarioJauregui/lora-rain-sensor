@@ -27,6 +27,9 @@ uint64_t lastRtt=0, txStarted=0;
 RainFrame pendingFrame{}, receiver{};
 bool pending=false, awaitingAck=false, rxKnown=false;
 bool configPending=false, resetPending=false;
+bool forceStateAfterAck=false, manualAwaitingConfirmation=false, remoteContactClosed=false;
+uint64_t sensorStateSinceMs=0, remoteContactObservedSinceMs=0;
+String manualFeedback="Sin orden manual";
 uint32_t requestedConfig=64, requestedLossSeconds=180;
 uint64_t requestedPulseMs=1000;
 bool fsReady=false, recording=false;
@@ -128,8 +131,9 @@ void latchRainEvent() {
 void updateSensor(bool immediate=false) {
   uint64_t now=uptimeMs();if(!immediate && now-lastSample<testSampleMs)return;lastSample=now;
   bool oldWet=wetNow();analogRain=readRain();doLevel=digitalRead(PIN_RAIN_DO);
+  if(simulation>=0)return; // La lectura física no gobierna el estado en modo manual.
   detector.sample(analogRain,rainOnThreshold,rainOffThreshold,now,corePrototype?0:confirmMs);
-  if(oldWet!=wetNow()) {if(wetNow())latchRainEvent();recordEvent("sensor_change");queueState();}
+  if(oldWet!=wetNow()) {sensorStateSinceMs=now;if(wetNow())latchRainEvent();recordEvent("sensor_change");queueState();}
 }
 String roleControlsHtml() {
   String s=F("<section><h2>Experimento</h2><div class='actions'>"
@@ -139,10 +143,13 @@ String roleControlsHtml() {
     "<small>Tiempo desde el inicio. Registro automático en el emisor, aunque se desconecte el móvil. "
     "Una grabación, hasta 1 MiB; se detiene al llenar la memoria. No borra datos al reiniciar.</small></section>"
     "<section><h2>Prueba de lluvia</h2><div class='actions'>"
-    "<button data-command='/simulate' data-value='wet'>Simular mojado</button>"
-    "<button data-command='/simulate' data-value='dry'>Simular seco</button>"
-    "<button data-command='/simulate' data-value='sensor'>Usar sensor físico</button></div>"
-    "<small>La simulación permanece hasta volver al sensor o reiniciar. Disponible solo en prototipo.</small></section>");
+    "<button class='primary' data-command='/simulate' data-value='off' id='manualEnable'>Desactivar sensor / modo manual</button>"
+    "<button data-command='/simulate' data-value='wet' id='manualWet'>Enviar MOJADO</button>"
+    "<button data-command='/simulate' data-value='dry' id='manualDry'>Enviar SECO</button>"
+    "<button data-command='/simulate' data-value='sensor' id='manualDisable'>Usar sensor físico</button></div>"
+    "<p id='manualModeState' role='status'>Leyendo modo...</p>"
+    "<small>Solo en prototipo. Primero desactiva el sensor: las órdenes MOJADO/SECO se enviarán por LoRa y se confirmarán mediante ACK. "
+    "El modo manual no depende de AO/DO y se desactiva al reiniciar o pasar a producción.</small></section>");
   s+=F("<dialog id='replaceRecord'><h2>Grabación anterior</h2><p>Descarga el archivo anterior antes de sustituirlo.</p>"
     "<div class='actions'><a class='button' href='/record.csv' download>Descargar anterior</a>"
     "<button id='confirmRecord'>Sustituir y grabar</button><button id='cancelRecord'>Cancelar</button></div></dialog>"
@@ -176,9 +183,15 @@ void configureRoleRoutes() {
   });
   web.on("/simulate",HTTP_POST,[](){
     if(!corePostAllowed())return;if(!corePrototype){web.send(409,"text/plain","Solo en prototipo");return;}
-    String value=web.arg("value");if(value!="wet"&&value!="dry"&&value!="sensor"){web.send(400,"text/plain","Origen invalido");return;}
-    bool previous=wetNow();simulation=value=="sensor"?-1:value=="wet"?1:0;
-    if(!previous&&wetNow())latchRainEvent();queueState();recordEvent("simulation_change");web.send(200,"text/plain","Origen actualizado; pendiente de confirmacion LoRa");
+    String value=web.arg("value");if(value!="off"&&value!="wet"&&value!="dry"&&value!="sensor"){web.send(400,"text/plain","Origen invalido");return;}
+    if((value=="wet"||value=="dry")&&simulation<0){web.send(409,"text/plain","Primero desactiva el sensor para usar el modo manual");return;}
+    bool previous=wetNow();
+    if(value=="sensor"){simulation=-1;updateSensor(true);manualFeedback="Sensor fisico activo";manualAwaitingConfirmation=false;}
+    else {simulation=value=="wet"?1:0;manualFeedback="Esperando ACK del receptor";manualAwaitingConfirmation=true;}
+    if(previous!=wetNow())sensorStateSinceMs=uptimeMs();
+    if(!previous&&wetNow())latchRainEvent();
+    if(pending||awaitingAck)forceStateAfterAck=true;else queueState();
+    recordEvent("simulation_change");web.send(202,"text/plain",simulation>=0?"Orden manual pendiente de confirmacion LoRa":"Sensor fisico habilitado; nuevo estado pendiente de envio");
   });
   web.on("/receiver",HTTP_POST,[](){
     if(!corePostAllowed())return;uint64_t policy,loss,armed,polarity,seconds,duration;
@@ -218,7 +231,11 @@ void configureRoleRoutes() {
 }
 String getStatusJson() {
   String s="{\"role\":\"TX\",\"version\":\""+String(FW_VERSION)+"\",\"wet\":"+String(wetNow()?"true":"false")+
-    ",\"simulated\":"+String(simulation>=0?"true":"false")+",\"ao\":"+String(analogRain)+",\"do\":"+String(doLevel)+
+    ",\"simulated\":"+String(simulation>=0?"true":"false")+",\"sensor_mode\":\""+String(simulation>=0?"manual":"physical")+"\""+
+    ",\"state_age_ms\":\""+u64(sensorStateSinceMs?uptimeMs()-sensorStateSinceMs:0)+"\""+
+    ",\"manual_pending\":"+String(manualAwaitingConfirmation?"true":"false")+",\"manual_feedback\":\""+manualFeedback+"\""+
+    ",\"rx_state_observed_ms\":"+(rxKnown?"\""+u64(uptimeMs()-remoteContactObservedSinceMs)+"\"":String("null"))+
+    ",\"ao\":"+String(analogRain)+",\"do\":"+String(doLevel)+
     ",\"battery_mv\":"+String(batteryMv)+",\"link_ok\":"+String(linkOk()?"true":"false")+
     ",\"ack_age_ms\":"+(lastAck?u64(uptimeMs()-lastAck):String("null"))+",\"rssi_dbm\":"+String(lastRssi,1)+",\"snr_db\":"+String(lastSnr,1)+
     ",\"rx_rssi_dbm\":"+String(remoteRssi,1)+",\"rx_snr_db\":"+String(remoteSnr,1)+",\"rtt_ms\":\""+u64(lastRtt)+"\""+
@@ -249,14 +266,26 @@ void processReceived() {
   }else if(f.type==FRAME_ACK&&sessionId&&f.session==sessionId&&f.ackSeq==pendingFrame.seq&&awaitingAck){
     lastRssi=radio.getRSSI();lastSnr=radio.getSNR();remoteRssi=f.peerRssi10/10.0f;remoteSnr=f.peerSnr10/10.0f;
     lastAck=uptimeMs();lastRtt=lastAck-txStarted;receiver=f;rxKnown=true;
+    if(!rxKnown||remoteContactClosed!=((f.config&128)?!(f.flags&ACK_COIL_ON):bool(f.flags&ACK_COIL_ON))){
+      remoteContactClosed=(f.config&128)?!(f.flags&ACK_COIL_ON):bool(f.flags&ACK_COIL_ON);
+      remoteContactObservedSinceMs=lastAck;
+    }
     if(pendingFrame.type==FRAME_STATE){++ackedStates;
       if(rainEvent.acknowledge(f.event)){if(!saveEvent())rainEvent.pending=true;}
+      if(manualAwaitingConfirmation && simulation>=0 && !forceStateAfterAck &&
+         (pendingFrame.flags&STATE_SIMULATED) && pendingFrame.wet==wetNow()){
+        manualAwaitingConfirmation=false;
+        manualFeedback=String("ACK confirmado: ")+(wetNow()?"MOJADO":"SECO");
+      }
     }else if(f.flags&(ACK_CONFIG|ACK_REJECTED)){
       configPending=false;resetPending=false;commandResult=f.flags&ACK_CONFIG?"Confirmada":"Rechazada por el receptor";
       recordEvent(f.flags&ACK_CONFIG?"receiver_config_confirmed":"receiver_command_rejected");
     }
     pending=false;awaitingAck=false;helloBackoff=15000;recordEvent("ack");
-    if(pendingFrame.type==FRAME_STATE&&(pendingFrame.wet!=wetNow()||pendingFrame.event!=(rainEvent.pending?rainEvent.id:0)||bool(pendingFrame.flags&STATE_SIMULATED)!=(simulation>=0)))queueState();
+    bool refreshState=forceStateAfterAck || (pendingFrame.type==FRAME_STATE &&
+      (pendingFrame.wet!=wetNow()||pendingFrame.event!=(rainEvent.pending?rainEvent.id:0)||bool(pendingFrame.flags&STATE_SIMULATED)!=(simulation>=0)));
+    forceStateAfterAck=false;
+    if(refreshState)queueState();
   }
   radio.startReceive();
 }
@@ -298,13 +327,14 @@ void setup() {
     File f=LittleFS.open("/experiment.csv","r");bool header=true;while(f.available()){String row=f.readStringUntil('\n');if(header){header=false;continue;}int comma=row.indexOf(','),end=row.indexOf(',',comma+1);uint64_t elapsed;
       if(comma>0&&end>comma&&validIso(row.substring(0,comma))&&rain::decimal(row.substring(comma+1,end).c_str(),elapsed)){recordStartIso=row.substring(0,comma);recordElapsed=elapsed;++recordRows;}}f.close();
   }
-  updateSensor(true);readBattery();
+  updateSensor(true);sensorStateSinceMs=uptimeMs();readBattery();
   if(!resumed)coreStartPortal(false);if(sessionId)queueState();nextSend=uptimeMs();
 }
 void loop() {
   coreTickPortal();coreTickDisplay(false);processReceived();managementTick();
   static bool previousPrototype=corePrototype;
-  if(previousPrototype&&!corePrototype){bool old=wetNow();simulation=-1;if(!old&&wetNow())latchRainEvent();
+  if(previousPrototype&&!corePrototype){bool old=wetNow();simulation=-1;manualAwaitingConfirmation=false;manualFeedback="Sensor fisico activo";
+    updateSensor(true);if(old!=wetNow())sensorStateSinceMs=uptimeMs();if(!old&&wetNow())latchRainEvent();
     if(recording){recordEvent("record_stop_mode");recordFile.close();recording=false;}queueState();}
   previousPrototype=corePrototype;
   if(!coreMaintenance)updateSensor();serviceRadio();
