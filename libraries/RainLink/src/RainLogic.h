@@ -4,6 +4,31 @@
 #include <limits.h>
 
 namespace rain {
+enum SensorCommand : uint8_t { MANUAL = 0, MANUAL_WET = 1, MANUAL_DRY = 2, PHYSICAL = 3 };
+struct SensorInput {
+  bool manual = false, value = false, pending = false;
+  uint32_t revision = 0;
+  bool wet(bool physical) const { return manual ? value : physical; }
+  bool select(uint8_t command, bool prototype, bool physical) {
+    if (!prototype || command > PHYSICAL ||
+        ((command == MANUAL_WET || command == MANUAL_DRY) && !manual)) return false;
+    value = command == MANUAL ? wet(physical) : command == MANUAL_WET;
+    manual = command != PHYSICAL;
+    ++revision; pending = true;
+    return true;
+  }
+  bool acknowledge(uint32_t sentRevision, bool rejected) {
+    if (!pending || sentRevision != revision || rejected) return false;
+    pending = false; return true;
+  }
+};
+// Elapsed-state units deliberately differ from the compact countdown units.
+inline uint64_t stateAgeValue(uint64_t ms) {
+  return ms > 86400000ULL ? ms / 3600000 : ms > 3600000ULL ? ms / 60000 : ms / 1000;
+}
+inline const char *stateAgeUnit(uint64_t ms) {
+  return ms > 86400000ULL ? "h" : ms > 3600000ULL ? "m" : "s";
+}
 inline bool contactClosed(bool nc,bool coil){return nc?!coil:coil;}
 inline int quality(float rssi,float snr,bool fresh,uint32_t confirmed,uint32_t sent){
   if(!fresh)return -1;

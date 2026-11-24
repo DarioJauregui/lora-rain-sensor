@@ -21,7 +21,7 @@
 #include "Portal.h"
 
 // Version shared by the two devices; Arduino-ESP32 core 3.3.2, RadioLib 7.8.1.
-static const char *FW_VERSION = "1.2.1-prototype";
+static const char *FW_VERSION = "1.2.2-prototype";
 static const uint32_t PROTOCOL_MAGIC = 0x52414E39UL;
 static const uint8_t PROTOCOL_VERSION = 3;
 static const uint32_t TX_ID = 0x54583031UL;
@@ -40,8 +40,7 @@ static const uint8_t ACK_REJECTED = 0x40;
 static const uint8_t STATE_SIMULATED = 0x10;
 static const uint8_t ACK_RELAY_ARMED = 0x02;
 
-// Clave HMAC: archivo privado local, no versionado.
-// PAIR_KEY is supplied by the sketch before including this header.
+// Runtime key loaded from NVS; public firmware binaries contain no private key.
 uint8_t PAIR_KEY[32]{};
 bool corePaired=false;
 
@@ -136,6 +135,7 @@ void requestLink();
 String compactTime(uint64_t ms){if(ms>=3600000)return u64(ms/3600000)+"h";if(ms>=60000)return u64(ms/60000)+"m"+u64(ms/1000%60);if(ms>=1000)return u64(ms/1000)+"s";return u64(ms)+"ms";}
 int coreQuality=-1;
 String coreTimer;
+String stateAge(uint64_t ms){return u64(rain::stateAgeValue(ms))+rain::stateAgeUnit(ms);}
 void coreSaveDevice() {
   Preferences p; p.begin("raindevice", false);
   p.putBool("prototype", corePrototype); p.putBool("display", coreDisplayEnabled); p.end();
@@ -262,13 +262,24 @@ void coreScreen(const String &line1, const String &line2,
   if (!coreOledReady || !coreOledOn) return;
   oled.clearBuffer();
   oled.setFont(u8g2_font_6x10_tf);
-  const String lines[] = {line1, line2, line3, line4, line5, line6};
-  for (uint8_t i = 0; i < 6; ++i) {
-    if(i<4)oled.drawUTF8(0,10+10*i,lines[i].substring(0,21).c_str());
+  const String lines[] = {line1, line2, line3, line4};
+  for (uint8_t i = 0; i < 4; ++i) {
+    int tab=lines[i].indexOf('|');
+    if(tab<0)oled.drawUTF8(0,10+10*i,lines[i].substring(0,21).c_str());
+    else {
+      String right=lines[i].substring(tab+1);
+      oled.drawUTF8(0,10+10*i,lines[i].substring(0,tab).c_str());
+      oled.drawUTF8(128-oled.getUTF8Width(right.c_str()),10+10*i,right.c_str());
+    }
   }
-  oled.setFont(u8g2_font_6x10_tf);oled.drawUTF8(0,62,coreTimer.substring(0,10).c_str());
   String quality=coreQuality<0?"--%":String(coreQuality)+"%";
-  oled.setFont(u8g2_font_logisoso16_tf);oled.drawStr(128-oled.getStrWidth(quality.c_str()),63,quality.c_str());
+  oled.setFont(u8g2_font_logisoso16_tf);
+  int qualityWidth=oled.getStrWidth(quality.c_str());
+  oled.drawStr(128-qualityWidth,63,quality.c_str());
+  oled.setFont(u8g2_font_5x8_tf);
+  const int columns=(128-qualityWidth-4)/5;
+  oled.drawUTF8(0,52,line5.substring(0,columns).c_str());
+  oled.drawUTF8(0,63,line6.substring(0,columns).c_str());
   oled.sendBuffer();
 }
 
@@ -310,6 +321,7 @@ String coreHtml() {
   h.replace("__TOKEN__", coreCsrfToken);
   h.replace("__ROLE__", coreRole);
   h.replace("__VERSION__", FW_VERSION);
+  h.replace("__DEVICE__",coreRole=="TX"?"Emisor":"Receptor");
   h.replace("__CONTROLS__", roleControlsHtml());
   return h;
 }

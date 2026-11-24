@@ -25,7 +25,7 @@ const fixture={role:'TX',prototype:true,display_enabled:true,link_ok:true,ack_ag
   rssi_dbm:-110,snr_db:-4,rx_rssi_dbm:-112,rx_snr_db:-5,duty_wait_ms:'0',sf:9,
   frequency_mhz:868.3,airtime_ms:520,recording:false,record_rows:10,record_elapsed_ms:'1234'};
 const ctx=vm.createContext({console,URLSearchParams,Date,BigInt,setInterval(){},confirm:()=>true,
-  document:{getElementById:id=>id==='theme'?null:element(id),
+  document:{body:{dataset:{}},addEventListener(){},getElementById:id=>id==='theme'?null:element(id),
     querySelector:s=>s==='main'?main:{elements:{mode:{},display:{}}},
     querySelectorAll:s=>s==='form[data-pulse]'?[pulseForm]:[],
     createElement:()=>makeNode()},
@@ -38,7 +38,7 @@ assert.equal(vm.runInContext("durationText('3600001')",ctx),'1 h 0 min 0 s 1 ms'
 assert.equal(main.dataset.view,'TX');
 assert.equal(element('accessTx').textContent,'● Wi-Fi directo');
 assert.equal(element('accessRx').textContent,'↝ Vía LoRa');
-assert.equal(element('source').textContent,'Simulación activa');
+assert.equal(element('source').textContent,'Control manual');
 assert.equal(element('link').textContent,'Confirmado');
 assert.match(element('viewStateAge').textContent,/12 s/);
 assert.match(element('manualModeState').textContent,/control manual/);
@@ -65,4 +65,45 @@ assert.equal(posted.at(-1)[1].get('token'),'__TOKEN__');
 assert.equal(posted.at(-1)[1].get('value'),'wet');
 await vm.runInContext("post('/remote-simulate',{value:'dry'})",ctx);
 assert.equal(posted.at(-1)[1].get('value'),'dry');
+// Local transition: physical -> manual enables both commands immediately, before ACK.
+vm.runInContext('chooseRole("TX");paint({...lastStatus,prototype:true,simulated:false})',ctx);
+assert.equal(element('manualWet').disabled,true);
+vm.runInContext('paint({...lastStatus,simulated:true,manual_pending:true,manual_feedback:"Esperando ACK"})',ctx);
+assert.equal(element('manualWet').disabled,false);
+assert.equal(element('manualDry').disabled,false);
+assert.match(element('manualModeState').textContent,/control manual/);
+vm.runInContext('paint({...lastStatus,simulated:false,manual_pending:true})',ctx);
+assert.equal(element('manualWet').disabled,true);
+// Actual RX-hosted portal: encrypted applied reply, not stale received physical state.
+const rxElements=new Map();
+const rxElement=id=>{if(!rxElements.has(id))rxElements.set(id,makeNode());return rxElements.get(id);};
+const rxMain={dataset:{role:'RX'}};
+const rxFixture={...fixture,role:'RX',simulated:false,remote_known:true,remote_prototype:1,remote_simulated:false,remote_wet:false};
+const rxContext=vm.createContext({console,URLSearchParams,Date,BigInt,setInterval(){},confirm:()=>true,
+  document:{body:{dataset:{}},addEventListener(){},getElementById:id=>id==='theme'?null:rxElement(id),
+    querySelector:s=>s==='main'?rxMain:{elements:{mode:{},display:{}}},querySelectorAll:()=>[],createElement:()=>makeNode()},
+  fetch:async()=>({ok:true,json:async()=>rxFixture,text:async()=>'OK'})});
+vm.runInContext(js,rxContext);await new Promise(resolve=>setImmediate(resolve));
+vm.runInContext('chooseRole("TX")',rxContext);
+assert.equal(rxElement('remoteManualWet').disabled,true);
+vm.runInContext('paint({...lastStatus,management_pending:true})',rxContext);
+assert.match(rxElement('remoteManualState').textContent,/pendiente/);
+assert.equal(rxElement('source').textContent,'Sensor físico · LoRa');
+vm.runInContext('paint({...lastStatus,management_pending:false,remote_simulated:true,remote_manual_pending:true})',rxContext);
+assert.equal(rxElement('source').textContent,'Control manual · LoRa');
+assert.equal(rxElement('remoteManualWet').disabled,false);
+assert.equal(rxElement('remoteManualDry').disabled,false);
+assert.match(rxElement('remoteManualState').textContent,/esperando/);
+vm.runInContext('paint({...lastStatus,remote_manual_pending:false,remote_wet:true})',rxContext);
+assert.match(rxElement('remoteManualState').textContent,/confirmado/);
+vm.runInContext('paint({...lastStatus,remote_simulated:false})',rxContext);
+assert.equal(rxElement('remoteManualWet').disabled,true);
+assert.equal(rxElement('localDevice').hidden,true);
+vm.runInContext('chooseRole("RX")',rxContext);
+assert.equal(rxElement('localDevice').hidden,false);
+assert.equal(rxElement('remoteSpace').hidden,true);
+// Refresh must not rebuild open groups every second (mobile selection/help regression).
+const groups=rxElement('data').children;
+vm.runInContext('paint({...lastStatus,wet:false})',rxContext);
+assert.equal(rxElement('data').children,groups);
 console.log('Portal: stable TX/RX selector, visual telemetry, simulation and CSRF passed');

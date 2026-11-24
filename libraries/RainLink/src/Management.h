@@ -32,7 +32,7 @@ uint8_t mgAttempts=0;
 String mgState="Sin operaciones",mgPeerSsid;
 Operational mgPeer{};
 bool mgPeerKnown=false,mgPeerAsleep=false;
-uint64_t mgLastReply=0;
+uint64_t mgLastReply=0,mgLastSeen=0;
 uint32_t localId(){return coreRole=="TX"?TX_ID:RX_ID;}
 bool validAccess(const char *ssid,const char *pass){
   size_t a=strnlen(ssid,33),b=strnlen(pass,64);
@@ -89,7 +89,7 @@ bool managementProcess(const RainFrame &f){
   if(f.type==8){
     if(!mgWaiting||f.event!=mgPending.event)return true;
     mgState=d.result?"Aplicada":"Rechazada";mgWaiting=false;mgLastReply=uptimeMs();
-    if(d.kind==0&&d.result){memcpy(&mgPeer,d.bytes,sizeof(mgPeer));mgPeerKnown=true;char ssid[33]{};memcpy(ssid,d.bytes+sizeof(mgPeer),32);mgPeerSsid=ssid;}
+    if((d.kind==0||d.kind==1||d.kind==4)&&d.result){memcpy(&mgPeer,d.bytes,sizeof(mgPeer));mgPeerKnown=true;char ssid[33]{};memcpy(ssid,d.bytes+sizeof(mgPeer),32);mgPeerSsid=ssid;}
     if(d.kind==2&&d.result){char name[33]{};memcpy(name,d.bytes,32);mgPeerSsid=name;}
     memset(&mgPending,0,sizeof(mgPending));return true;
   }
@@ -103,6 +103,10 @@ bool managementProcess(const RainFrame &f){
     if(d.kind==4){ok=managementApplyTest&&managementApplyTest(d.bytes[0]);memset(d.bytes,0,sizeof(d.bytes));}
   }
   if(!ok)memset(d.bytes,0,sizeof(d.bytes));
+  if(ok&&(d.kind==1||d.kind==4)){
+    auto op=getOperational();memset(d.bytes,0,sizeof(d.bytes));memcpy(d.bytes,&op,sizeof(op));
+    memcpy(d.bytes+sizeof(op),coreApSsid.c_str(),coreApSsid.length());
+  }
   if(ok&&d.kind)recordEvent("remote_change_applied");
   d.result=ok;mgCached=newFrame(8,localId(),managementOwnBoot,++mgSequence,session);mgCached.event=f.event;
   if(mgSeal(mgCached,d)){mgHighest=f.seq;mgHaveCache=true;delay(65);transmitFrame(mgCached,managementOnRx);}
@@ -113,7 +117,7 @@ void managementTick(){
   uint64_t session=managementSession(),now=uptimeMs();
   if(!session){mgState="Esperando dispositivo";return;}
   if(now<mgNext||coreDutyWaitMs()||!managementCanSend())return;
-  if(coreRole=="RX"&&mgPeerAsleep&&(!mgLastReply||now-mgLastReply>2000)){mgState="Esperando dispositivo";return;}
+  if(coreRole=="RX"&&mgPeerAsleep&&(!mgLastSeen||now-mgLastSeen>2000)){mgState="Esperando dispositivo";return;}
   if(mgAttempts>=3){mgWaiting=false;mgState="Sin confirmacion";memset(&mgPending,0,sizeof(mgPending));return;}
   if(!mgAttempts){ManagementData d;memcpy(&d,mgPending.payload,sizeof(d));mgPending.session=session;
     if(!mgSeal(mgPending,d)){mgWaiting=false;mgState="Error criptografico";}memset(&d,0,sizeof(d));if(!mgWaiting)return;}
@@ -123,7 +127,7 @@ void managementTick(){
 }
 String jsonEscape(String v){v.replace("\\","\\\\");v.replace("\"","\\\"");return v;}
 String managementStatus(){
-  return ",\"paired\":"+String(corePaired?"true":"false")+",\"ssid\":\""+jsonEscape(coreApSsid)+"\",\"management_state\":\""+mgState+"\",\"remote_ssid\":\""+jsonEscape(mgPeerSsid)+"\",\"remote_known\":"+String(mgPeerKnown?"true":"false")+
+  return ",\"management_pending\":"+String(mgWaiting?"true":"false")+",\"remote_manual_pending\":"+String(mgPeer.reserved&1?"true":"false")+",\"paired\":"+String(corePaired?"true":"false")+",\"ssid\":\""+jsonEscape(coreApSsid)+"\",\"management_state\":\""+mgState+"\",\"remote_ssid\":\""+jsonEscape(mgPeerSsid)+"\",\"remote_known\":"+String(mgPeerKnown?"true":"false")+
     ",\"remote_wet\":"+String(mgPeer.wet?"true":"false")+",\"remote_simulated\":"+String(mgPeer.simulated?"true":"false")+
     ",\"remote_last_reply_age_ms\":"+(mgLastReply?"\""+u64(uptimeMs()-mgLastReply)+"\"":String("null"))+
     ",\"remote_sample\":"+String(mgPeer.sampleMs)+",\"remote_confirm_ms\":"+String(mgPeer.confirmMs)+",\"remote_heartbeat_ms\":"+String(mgPeer.heartbeatMs)+",\"remote_sleep_ms\":"+String(mgPeer.sleepMs)+

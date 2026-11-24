@@ -16,7 +16,9 @@ uint64_t sessionId=0, helloNonce=0;
 volatile bool rxInterrupt=false;
 rain::Detector detector;
 uint16_t analogRain=4095, rainOnThreshold=3500, rainOffThreshold=3900, batteryMv=0;
-int doLevel=-1, simulation=-1, batteryGate=0;
+int doLevel=-1, batteryGate=0;
+rain::SensorInput sensorInput;
+uint32_t pendingSensorRevision=0;
 uint32_t testSampleMs=50, confirmMs=0, heartbeatMs=30000, sleepMs=120000;
 bool doWakeEnabled=false, resumed=false;
 rain::PendingRain rainEvent;
@@ -27,7 +29,7 @@ uint64_t lastRtt=0, txStarted=0;
 RainFrame pendingFrame{}, receiver{};
 bool pending=false, awaitingAck=false, rxKnown=false;
 bool configPending=false, resetPending=false;
-bool forceStateAfterAck=false, manualAwaitingConfirmation=false, remoteContactClosed=false;
+bool forceStateAfterAck=false, remoteRelayActive=false;
 uint64_t sensorStateSinceMs=0, remoteContactObservedSinceMs=0;
 String manualFeedback="Sin orden manual";
 uint32_t requestedConfig=64, requestedLossSeconds=180;
@@ -42,7 +44,7 @@ String commandResult;
 constexpr size_t RECORD_LIMIT=1024*1024;
 
 void IRAM_ATTR onRadioReceive() { rxInterrupt=true; }
-bool wetNow() { return simulation<0?detector.wet:simulation==1; }
+bool wetNow() { return sensorInput.wet(detector.wet); }
 bool linkOk() { return lastAck && uptimeMs()-lastAck < (uint64_t)heartbeatMs*3+10000; }
 bool saveEvent() {
   Preferences p;
@@ -70,7 +72,7 @@ bool validIso(const String &s) {
 void recordEvent(const char *event) {
   if (!recording || !recordFile) return;
   uint64_t now=uptimeMs(); recordElapsed=now-recordStarted;
-  String line=recordStartIso+","+u64(recordElapsed)+","+event+","+String(analogRain)+","+String(doLevel)+","+String(wetNow())+","+String(simulation>=0)+","+
+  String line=recordStartIso+","+u64(recordElapsed)+","+event+","+String(analogRain)+","+String(doLevel)+","+String(wetNow())+","+String(sensorInput.manual)+","+
     String(batteryMv)+","+(lastAck?u64(now-lastAck):String(""))+","+String(lastRssi,1)+","+String(lastSnr,1)+","+
     String(coreTxCount)+","+String(ackedStates)+","+String(retries)+","+String(ackTimeouts)+","+String(lastRtt)+","+
     String(rxKnown)+","+String(receiver.flags)+","+u64(receiver.remainingMs)+","+String(rainEvent.id)+","+String(rainEvent.pending)+","+
@@ -116,11 +118,12 @@ void queueState() {
   // Do not mutate an in-flight packet. The current state is queued after its ACK.
   if(pending || awaitingAck)return;
   pendingFrame=newFrame(FRAME_STATE,TX_ID,senderBoot,++txSequence,sessionId);
+  pendingSensorRevision=sensorInput.revision;
   pendingFrame.wet=wetNow();pendingFrame.ao=analogRain;pendingFrame.batteryMv=batteryMv;
   pendingFrame.event=rainEvent.pending?rainEvent.id:0;
   pendingFrame.ackSeq=((corePrototype?heartbeatMs:sleepMs)+999)/1000;
   if(!corePrototype)pendingFrame.flags|=4;
-  if(simulation>=0)pendingFrame.flags|=STATE_SIMULATED;
+  if(sensorInput.manual)pendingFrame.flags|=STATE_SIMULATED;
   pending=true;attempts=0;nextSend=uptimeMs();
 }
 void latchRainEvent() {
@@ -131,25 +134,25 @@ void latchRainEvent() {
 void updateSensor(bool immediate=false) {
   uint64_t now=uptimeMs();if(!immediate && now-lastSample<testSampleMs)return;lastSample=now;
   bool oldWet=wetNow();analogRain=readRain();doLevel=digitalRead(PIN_RAIN_DO);
-  if(simulation>=0)return; // La lectura física no gobierna el estado en modo manual.
+  if(sensorInput.manual)return; // La lectura física no gobierna el estado en modo manual.
   detector.sample(analogRain,rainOnThreshold,rainOffThreshold,now,corePrototype?0:confirmMs);
   if(oldWet!=wetNow()) {sensorStateSinceMs=now;if(wetNow())latchRainEvent();recordEvent("sensor_change");queueState();}
 }
 // Shared by the local web portal and encrypted RX -> TX LoRa commands.
 bool applyManualSelection(uint8_t command) {
-  if(!corePrototype || command>3 || ((command==1||command==2)&&simulation<0))return false;
   const bool previous=wetNow();
-  if(command==3) {
-    simulation=-1;updateSensor(true);
-    manualFeedback="Sensor fisico activo";manualAwaitingConfirmation=false;
-  } else {
-    simulation=command==0?(previous?1:0):(command==1?1:0);
-    manualFeedback="Esperando ACK del receptor";manualAwaitingConfirmation=true;
+  if(!sensorInput.select(command,corePrototype,detector.wet))return false;
+  if(command==rain::PHYSICAL) {
+    // Start a fresh physical decision; a manual episode must not retain old hysteresis.
+    detector={};updateSensor(true);
   }
+  manualFeedback="Esperando ACK del receptor";
   if(previous!=wetNow())sensorStateSinceMs=uptimeMs();
   if(!previous&&wetNow())latchRainEvent();
   if(pending||awaitingAck)forceStateAfterAck=true;else queueState();
-  recordEvent("simulation_change");
+  const char *event=command==rain::MANUAL?"sensor_manual":command==rain::PHYSICAL?"sensor_physical":
+    command==rain::MANUAL_WET?"manual_wet":"manual_dry";
+  recordEvent(event);
   return true;
 }
 String roleControlsHtml() {
@@ -203,7 +206,7 @@ void configureRoleRoutes() {
     String value=web.arg("value");int command=value=="off"?0:value=="wet"?1:value=="dry"?2:value=="sensor"?3:-1;
     if(command<0){web.send(400,"text/plain","Orden invalida");return;}
     if(!applyManualSelection(command)){web.send(409,"text/plain","Activa el modo Prototipo y desactiva el sensor antes de enviar MOJADO/SECO");return;}
-    web.send(202,"text/plain",simulation>=0?"Orden manual pendiente de ACK LoRa":"Sensor fisico habilitado");
+    web.send(202,"text/plain",sensorInput.manual?"Orden manual pendiente de ACK LoRa":"Sensor fisico habilitado");
   });
   web.on("/receiver",HTTP_POST,[](){
     if(!corePostAllowed())return;uint64_t policy,loss,armed,polarity,seconds,duration;
@@ -243,9 +246,9 @@ void configureRoleRoutes() {
 }
 String getStatusJson() {
   String s="{\"role\":\"TX\",\"version\":\""+String(FW_VERSION)+"\",\"wet\":"+String(wetNow()?"true":"false")+
-    ",\"simulated\":"+String(simulation>=0?"true":"false")+",\"sensor_mode\":\""+String(simulation>=0?"manual":"physical")+"\""+
+    ",\"simulated\":"+String(sensorInput.manual?"true":"false")+",\"sensor_mode\":\""+String(sensorInput.manual?"manual":"physical")+"\""+
     ",\"state_age_ms\":\""+u64(sensorStateSinceMs?uptimeMs()-sensorStateSinceMs:0)+"\""+
-    ",\"manual_pending\":"+String(manualAwaitingConfirmation?"true":"false")+",\"manual_feedback\":\""+manualFeedback+"\""+
+    ",\"manual_pending\":"+String(sensorInput.pending?"true":"false")+",\"manual_feedback\":\""+manualFeedback+"\""+
     ",\"rx_state_observed_ms\":"+(rxKnown?"\""+u64(uptimeMs()-remoteContactObservedSinceMs)+"\"":String("null"))+
     ",\"ao\":"+String(analogRain)+",\"do\":"+String(doLevel)+
     ",\"battery_mv\":"+String(batteryMv)+",\"link_ok\":"+String(linkOk()?"true":"false")+
@@ -280,24 +283,24 @@ void processReceived() {
     lastRssi=radio.getRSSI();lastSnr=radio.getSNR();remoteRssi=f.peerRssi10/10.0f;remoteSnr=f.peerSnr10/10.0f;
     const bool firstReceiverState=!rxKnown;
     lastAck=uptimeMs();lastRtt=lastAck-txStarted;receiver=f;rxKnown=true;
-    if(firstReceiverState||remoteContactClosed!=((f.config&128)?!(f.flags&ACK_COIL_ON):bool(f.flags&ACK_COIL_ON))){
-      remoteContactClosed=(f.config&128)?!(f.flags&ACK_COIL_ON):bool(f.flags&ACK_COIL_ON);
+    if(firstReceiverState||remoteRelayActive!=bool(f.flags&ACK_ACTIVE)){
+      remoteRelayActive=f.flags&ACK_ACTIVE;
       remoteContactObservedSinceMs=lastAck;
     }
-    if(pendingFrame.type==FRAME_STATE){++ackedStates;
-      if(rainEvent.acknowledge(f.event)){if(!saveEvent())rainEvent.pending=true;}
-      if(manualAwaitingConfirmation && simulation>=0 && !forceStateAfterAck &&
-         (pendingFrame.flags&STATE_SIMULATED) && pendingFrame.wet==wetNow()){
-        manualAwaitingConfirmation=false;
-        manualFeedback=String("ACK confirmado: ")+(wetNow()?"MOJADO":"SECO");
-      }
+    if(pendingFrame.type==FRAME_STATE){if(!(f.flags&ACK_REJECTED))++ackedStates;
+      if(!(f.flags&ACK_REJECTED)&&rainEvent.acknowledge(f.event)){if(!saveEvent())rainEvent.pending=true;}
+      if(pendingFrame.wet==wetNow()&&bool(pendingFrame.flags&STATE_SIMULATED)==sensorInput.manual&&sensorInput.acknowledge(pendingSensorRevision,f.flags&ACK_REJECTED)){
+        manualFeedback=String("ACK confirmado: ")+(wetNow()?"MOJADO":"SECO")+(sensorInput.manual?" manual":" fisico");
+        recordEvent("sensor_command_ack");
+      }else if(f.flags&ACK_REJECTED){manualFeedback="Rechazada por el receptor";recordEvent("sensor_command_rejected");}
+
     }else if(f.flags&(ACK_CONFIG|ACK_REJECTED)){
       configPending=false;resetPending=false;commandResult=f.flags&ACK_CONFIG?"Confirmada":"Rechazada por el receptor";
       recordEvent(f.flags&ACK_CONFIG?"receiver_config_confirmed":"receiver_command_rejected");
     }
     pending=false;awaitingAck=false;helloBackoff=15000;recordEvent("ack");
     bool refreshState=forceStateAfterAck || (pendingFrame.type==FRAME_STATE &&
-      (pendingFrame.wet!=wetNow()||pendingFrame.event!=(rainEvent.pending?rainEvent.id:0)||bool(pendingFrame.flags&STATE_SIMULATED)!=(simulation>=0)));
+      (pendingFrame.wet!=wetNow()||pendingFrame.event!=(rainEvent.pending?rainEvent.id:0)||bool(pendingFrame.flags&STATE_SIMULATED)!=(sensorInput.manual)));
     forceStateAfterAck=false;
     if(refreshState)queueState();
   }
@@ -347,17 +350,19 @@ void setup() {
 void loop() {
   coreTickPortal();coreTickDisplay(false);processReceived();managementTick();
   static bool previousPrototype=corePrototype;
-  if(previousPrototype&&!corePrototype){bool old=wetNow();simulation=-1;manualAwaitingConfirmation=false;manualFeedback="Sensor fisico activo";
+  if(previousPrototype&&!corePrototype){bool old=wetNow();sensorInput.manual=false;sensorInput.pending=true;++sensorInput.revision;manualFeedback="Sensor fisico: esperando ACK";detector={};
     updateSensor(true);if(old!=wetNow())sensorStateSinceMs=uptimeMs();if(!old&&wetNow())latchRainEvent();
-    if(recording){recordEvent("record_stop_mode");recordFile.close();recording=false;}queueState();}
+    recordEvent("sensor_physical_production");if(recording){recordEvent("record_stop_mode");recordFile.close();recording=false;}
+    if(pending||awaitingAck)forceStateAfterAck=true;else queueState();}
   previousPrototype=corePrototype;
   if(!coreMaintenance)updateSensor();serviceRadio();
   uint64_t now=uptimeMs();static uint64_t lastBattery=0;
   if(!coreMaintenance&&now-lastBattery>=30000){lastBattery=now;readBattery();}
   if(recording&&now-lastRecordSnapshot>=1000){lastRecordSnapshot=now;recordEvent("sample");}
   if(now-lastScreen>=1000){lastScreen=now;coreQuality=rain::quality(lastRssi,lastSnr,linkOk(),ackedStates,sentStates);
-    if(coreApActive&&now<30000)coreDisplayPortalIfNeeded();else coreScreen("LoraRainSensor TX",wetNow()?"MOJADO":"SECO",simulation>=0?"SIMULACION":"SENSOR",
-      linkOk()?"ACK OK":"SIN CONFIRMACION","RSSI "+String(lastRssi,0),recording?"GRABANDO":"");}
+    if(coreApActive&&now<30000)coreDisplayPortalIfNeeded();else coreScreen("LoraRainSensor TX",String(wetNow()?"MOJADO":"SECO")+"|AO "+String(analogRain),sensorInput.manual?"MANUAL":"FISICO",
+      (sensorInput.pending?"ACK pendiente":linkOk()?"ACK OK":"SIN ACK")+(lastAck?" "+compactTime(now-lastAck):String("")),
+      rxKnown?String("Rel ")+(remoteRelayActive?"ON ":"OFF ")+stateAge(now-remoteContactObservedSinceMs):String("Rel --"),"");}
   if((!lastAck||now-lastAck>2000)&&!coreRebootAtMs&&!mgWaiting&&!corePrototype&&!coreApActive&&!coreMaintenance&&!recording&&!awaitingAck&&
      ((!pending&&sessionId)||(!sessionId&&now>20000)||(now>30000&&!configPending&&!resetPending))&&now>2500&&now>=confirmMs+500){
     savedSignature=RTC_SIGNATURE;savedBoot=senderBoot;savedSeq=txSequence;savedSession=sessionId;savedWet=detector.wet;
@@ -372,7 +377,7 @@ void loop() {
 uint64_t managementSession(){return sessionId;}
 void managementRxAction(){queueState();}
 void requestLink(){queueState();}
-Operational getOperational(){Operational op{};op.sampleMs=testSampleMs;op.confirmMs=confirmMs;op.heartbeatMs=heartbeatMs;op.sleepMs=sleepMs;op.on=rainOnThreshold;op.off=rainOffThreshold;op.prototype=corePrototype;op.display=coreDisplayEnabled;op.doWake=doWakeEnabled;op.role=1;op.uptime=uptimeMs();op.freeHeap=ESP.getFreeHeap();op.ao=analogRain;op.battery=batteryMv;op.doLevel=doLevel;op.wet=wetNow();op.simulated=simulation>=0;op.rxPackets=ackedStates;op.txPackets=coreTxCount;op.errors=authRejects+coreTxErrors;return op;}
+Operational getOperational(){Operational op{};op.sampleMs=testSampleMs;op.confirmMs=confirmMs;op.heartbeatMs=heartbeatMs;op.sleepMs=sleepMs;op.on=rainOnThreshold;op.off=rainOffThreshold;op.prototype=corePrototype;op.display=coreDisplayEnabled;op.doWake=doWakeEnabled;op.role=1;op.uptime=uptimeMs();op.freeHeap=ESP.getFreeHeap();op.ao=analogRain;op.battery=batteryMv;op.doLevel=doLevel;op.wet=wetNow();op.simulated=sensorInput.manual;op.reserved=sensorInput.pending?1:0;op.rxPackets=ackedStates;op.txPackets=coreTxCount;op.errors=authRejects+coreTxErrors;return op;}
 bool applyOperational(const Operational &op){
   if(op.role!=1||op.sampleMs<10||op.sampleMs>60000||op.confirmMs>60000||op.heartbeatMs<1000||op.heartbeatMs>86400000||op.sleepMs<1000||op.sleepMs>86400000||op.on>3900||op.off>4095||op.off<=op.on||op.prototype>1||op.doWake>1)return false;
   // Whole operational update is one NVS entry; loaded atomically after restart.

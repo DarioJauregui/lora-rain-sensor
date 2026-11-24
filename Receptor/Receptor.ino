@@ -28,6 +28,7 @@ struct ControlGuard {
 };
 rain::Pulse pulse;
 bool controlArmed=false, activeCoil=true, coilOn=false, haveState=false, lastRain=false, simulated=false;
+bool lastRelayActive=false;
 bool sessionReady=false, commsLost=true;
 std::atomic<bool> persistDirty{false};
 uint8_t lossPolicy=rain::HOLD_OUTPUT;
@@ -41,7 +42,7 @@ volatile bool rxInterrupt=false;
 
 void IRAM_ATTR onRadioReceive(){rxInterrupt=true;}
 void recordEvent(const char *event){Serial.printf("%llu %s\n",(unsigned long long)uptimeMs(),event);}
-void setPhysicalCoil(bool on){if(coilOn!=on)relayStateSinceMs=uptimeMs();coilOn=on;digitalWrite(PIN_RELAY_NPN,(on==bool(RAIN_RELAY_ACTIVE_HIGH))?HIGH:LOW);}
+void setPhysicalCoil(bool on){bool active=controlArmed&&haveState&&!coreMaintenance&&(on==activeCoil);if(lastRelayActive!=active)relayStateSinceMs=uptimeMs();lastRelayActive=active;coilOn=on;digitalWrite(PIN_RELAY_NPN,(on==bool(RAIN_RELAY_ACTIVE_HIGH))?HIGH:LOW);}
 // Caller holds controlMutex. All paths, including web and OTA, share this gate.
 void applyControl(){
   setPhysicalCoil(rain::outputCoil(coreMaintenance,controlArmed,haveState,commsLost,
@@ -166,9 +167,11 @@ void processReceived(){
   }
   if(f.type!=FRAME_STATE||f.wet>1){radio.startReceive();return;}
   {ControlGuard lock;
-    highestSeq=f.seq;lastFresh=uptimeMs();mgLastReply=lastFresh;mgPeerAsleep=f.flags&4;
+    highestSeq=f.seq;lastFresh=uptimeMs();mgLastSeen=lastFresh;mgPeerAsleep=f.flags&4;
     if(!haveState||lastRain!=(f.wet!=0))wetStateSinceMs=lastFresh;
     haveState=true;commsLost=false;lastRain=f.wet;simulated=f.flags&STATE_SIMULATED;
+    if(mgPeerKnown&&mgPeer.wet==lastRain&&mgPeer.simulated==simulated)mgPeer.reserved&=~1;
+    if(mgPeerKnown&&!(mgPeer.reserved&1)){mgPeer.wet=lastRain;mgPeer.simulated=simulated;mgPeer.ao=f.ao;}
     lastAO=f.ao;lastBatteryMv=f.batteryMv;lastRssi=radio.getRSSI();lastSnr=radio.getSNR();++rxCount;
     bool event=f.event&&f.event!=lastEvent;bool wasActive=pulse.active;
     pulse.observe(lastRain,event,lastFresh);pulse.tick(lastFresh,true);if(event){lastEvent=f.event;persistDirty=true;}
@@ -192,8 +195,8 @@ void loop(){
   static uint64_t lastScreen=0;uint64_t now=uptimeMs();
   if(now-lastScreen>=1000){lastScreen=now;
     if(coreApActive&&now<30000)coreDisplayPortalIfNeeded();else {
-      ControlGuard lock;coreQuality=rain::quality(lastRssi,lastSnr,!commsLost,rxCount,rxCount);coreTimer=pulse.active?compactTime(pulse.remaining(now)):"";coreScreen("LoraRainSensor RX",rain::contactClosed(CONTACT_NC,coilOn)?"RELE CERRADO":"RELE ABIERTO",lastRain?"MOJADO":"SECO",commsLost?"SIN ENLACE":"ENLACE OK",
-        "BOBINA "+String(coilOn?"ON":"OFF"),controlArmed?"ARMADO":"DESARMADO");}}
+      ControlGuard lock;coreQuality=rain::quality(lastRssi,lastSnr,!commsLost,rxCount,rxCount);coreTimer=pulse.active&&!pulse.restored?"Temp "+compactTime(pulse.remaining(now)):"Temp --";coreScreen("LoraRainSensor RX",rain::contactClosed(CONTACT_NC,coilOn)?"RELE CERRADO":"RELE ABIERTO",String(lastRain?"MOJADO":"SECO")+(simulated?" MAN":" FIS"),commsLost?"SIN ENLACE":"ENLACE OK",
+        String("Rel ")+(relayActive()?"ON ":"OFF ")+stateAge(now-relayStateSinceMs),coreTimer);}}
   delay(1);
 }
 

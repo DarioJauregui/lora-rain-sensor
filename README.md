@@ -1,134 +1,130 @@
-# LoraRainSensor 1.2.1-prototype
+# LoraRainSensor
 
-## Navegación unificada y pruebas de campo
+Firmware de emisor y receptor para **Heltec WiFi LoRa 32 V3**, con portal Wi-Fi, sensor de lluvia y relé configurable. Versión de desarrollo **1.2.2-prototype**, protocolo 3. La rama `main` contiene la versión integrada; las publicaciones de desarrollo se generan desde ella tras superar pruebas y compilación.
 
-El selector **Emisor (azul) / Receptor (naranja)** aparece en primer lugar en ambos portales. El color corresponde al tipo de dispositivo, independientemente del Wi-Fi al que se conecte el usuario. La insignia **Wi-Fi directo** indica el dispositivo anfitrión; el otro se administra **vía LoRa**. Cambiar de pestaña no cambia la conexión Wi-Fi ni hace una actualización de firmware remota.
+## Descargas e instalación
 
-En modo Prototipo, desde TX puede desactivarse la entrada del sensor para utilizar **Enviar MOJADO / Enviar SECO** con ACK verificable, incluso con AO/DO desconectados. Desde RX también se pueden enviar esas órdenes al TX por administración LoRa cifrada. La telemetría ordena los indicadores en bloques, explica su significado y distingue edades locales de últimos estados observados en remoto.
+[Versión 1.2.2-prototype](https://github.com/DarioJauregui/lora-rain-sensor/releases/tag/v1.2.2-prototype):
 
-El firmware RX utiliza **GPIO5 por defecto** como mando de relé. Hay además una imagen experimental **Receptor-GPIO2-NO** para quien haya cableado el pin de señal del relé a GPIO2, con salida activa HIGH. Comprobar el tipo de módulo, el nivel de disparo y el contacto NO/NC con la carga desconectada antes de usar cualquier variante.
+| Archivo OTA | Dispositivo y cableado |
+|---|---|
+| [LoraRainSensor-Emisor.bin](https://github.com/DarioJauregui/lora-rain-sensor/releases/download/v1.2.2-prototype/LoraRainSensor-Emisor.bin) | Emisor, AO GPIO4; DO opcional GPIO2 |
+| [LoraRainSensor-Receptor-NO.bin](https://github.com/DarioJauregui/lora-rain-sensor/releases/download/v1.2.2-prototype/LoraRainSensor-Receptor-NO.bin) | Receptor, mando **GPIO5**, contacto COM-NO |
+| [LoraRainSensor-Receptor-NC.bin](https://github.com/DarioJauregui/lora-rain-sensor/releases/download/v1.2.2-prototype/LoraRainSensor-Receptor-NC.bin) | Receptor, mando **GPIO5**, contacto COM-NC |
+| [SHA256SUMS.txt](https://github.com/DarioJauregui/lora-rain-sensor/releases/download/v1.2.2-prototype/SHA256SUMS.txt) | Integridad de las tres imágenes |
 
+Actualizar **ambos nodos**. Son imágenes de aplicación para OTA o dirección USB `0x10000`, con las particiones de 8 MB por defecto de la placa. No son imágenes completas de flash. Elegir el archivo correspondiente al rol y al contacto cableado. La variante GPIO2 de 1.2.1 queda como antecedente; las imágenes actuales de receptor utilizan GPIO5.
 
-Versión de desarrollo para Heltec WiFi LoRa 32 V3. **Protocolo 3: actualizar ambos nodos.** Las pruebas de compilación no validan el montaje ni la precisión física de un relé.
+Para OTA, conectarse directamente al Wi-Fi de cada placa, entrar en su vista y abrir **Actualizar firmware**. Elegir el `.bin` de ese dispositivo. La selección de dispositivo en el portal no cambia de Wi-Fi ni permite OTA remota por LoRa. Durante mantenimiento, RX desenergiza la salida; una carga fallida requiere reiniciar para recuperar servicio.
 
-## Descargas públicas y primer arranque
+Los binarios públicos no incorporan claves privadas. OTA conserva NVS y LittleFS: ajustes, emparejamiento y grabación. No borrar toda la flash para una actualización ordinaria.
 
-Los binarios publicados en la release `v1.2.0-prototype` no contienen claves privadas de emparejamiento. Emisor, Receptor-NO y Receptor-NC son imágenes de aplicación para OTA o dirección de aplicación `0x10000`, con las particiones por defecto de 8 MB. No son imágenes completas de flash. Se publican sumas SHA-256 junto a los archivos.
+## Primer arranque y enlace
 
-En cada equipo, conecta al Wi-Fi mostrado en OLED, abre `192.168.4.1` e inicia sesión con `admin` y la contraseña individual de la pantalla. En Emparejamiento LoRa configura **la misma clave aleatoria privada de 32 bytes (64 dígitos hexadecimales)** en ambos equipos. Se guarda en NVS, nunca en el binario. Hasta entonces no se transmiten órdenes LoRa. Las claves antiguas incorporadas en otro firmware no se migran automáticamente. Tras borrar toda la flash, genera una clave nueva: no reutilices una clave anterior con los contadores criptográficos borrados.
+1. Conectar la antena de cada placa y alimentar ambas.
+2. Conectar al Wi-Fi individual mostrado en OLED (`LLUVIA-TX-XXXX` / `LLUVIA-RX-XXXX`). Abrir `http://192.168.4.1`; usuario `admin`, contraseña individual de la OLED. Se muestran las credenciales durante los primeros 30 s; reiniciar permite volver a verlas.
+3. En **Emparejamiento LoRa local**, guardar la misma clave privada aleatoria de **32 bytes, 64 caracteres hexadecimales**, en cada placa. Reiniciarán. Hasta configurar la clave no transmiten LoRa. Una frase recordable no es una clave válida para este campo.
+4. Esperar el intercambio o solicitarlo con **↻**. Un envío por sí solo no confirma el enlace: comprobar ACK y antigüedad. Las claves antiguas embebidas en otro firmware no se importan automáticamente.
+5. El receptor nuevo arranca con el control automático deshabilitado. Configurar pulso, comportamiento, polaridad y pérdida de enlace; escribir `ARMAR` para habilitarlo.
 
-## Interfaz y mediciones
+Tras borrar toda la flash, usar una clave LoRa nueva, para no reutilizar nonces criptográficos con contadores reiniciados. La clave se guarda en NVS y no se devuelve en telemetría ni CSV.
 
-Nombre LoraRainSensor; tema claro/oscuro/automático persistido en el navegador. Se separan Este dispositivo y Dispositivo remoto. Las duraciones se editan en Horas | Minutos | Segundos | Milisegundos. Calibración muestra AO, DO y estado; AO es un ADC 0–4095. Los umbrales diferentes de entrada/salida crean histéresis. Prototipo detecta en la siguiente lectura; producción puede exigir una condición estable y retrasarse durante el sueño.
+## Portal y modos
 
-El botón **↻** solicita una nueva comunicación LoRa, respetando cola, reintentos y presupuesto de radio. No convierte datos antiguos en nuevos. Si el emisor duerme, la operación espera una ventana de recepción. La telemetría distingue datos locales, recibidos y su antigüedad.
+El selector fijo **Emisor / Receptor** mantiene el equipo elegido durante el desplazamiento: fondo azul para TX y naranja para RX, también en tema oscuro. Cada vista muestra sus controles y telemetría. **Wi-Fi directo** identifica al anfitrión; **Vía LoRa** identifica al remoto. Cambiar de vista no cambia la conexión Wi-Fi. Emparejamiento, reinicio, Wi-Fi, pantalla y OTA locales solo aparecen en la vista del anfitrión y llevan su nombre.
 
-Porcentaje de calidad estimado: 35 % de RSSI normalizado entre −125 y −65 dBm, 25 % de SNR entre −12 y +10 dB y 40 % de confirmaciones sobre transmisiones reales. Cada componente se limita a 0–100. En RX la recepción autenticada aporta el componente de entrega; RX no puede conocer intentos TX que nunca recibió. No es cobertura calibrada, distancia ni intensidad de lluvia. Sin información vigente: `--%`. OLED reserva cuatro filas superiores para estados y la banda inferior para temporizador compacto y porcentaje grande, sin solaparlos.
+Los selectores conservan el manejo nativo del móvil, con campos de tamaño táctil y duraciones H:M:S:ms. Las ayudas se abren pulsando `i`, en un diálogo con botón Cerrar. Los desplegables de telemetría conservan su apertura durante las actualizaciones. Tema claro, oscuro o automático, persistido en el navegador.
 
-## Contacto y habilitación
+- **Prototipo:** emisor despierto, lectura continua, Wi-Fi y OLED disponibles, desactivables desde el portal. Permite órdenes manuales y grabar experimentos.
+- **Producción:** emisor duerme entre lecturas; confirma la condición al despertar durante el tiempo configurado. Wi-Fi abre durante tres minutos tras un arranque completo; el despertar periódico no lo reabre. DO puede despertar la placa si se ha validado su cableado y polaridad. Pasar a producción desactiva el modo manual y cierra una grabación activa.
+- Reiniciar reabre Wi-Fi. En RX, reiniciar interrumpe su salida.
 
-`RAIN_CONTACT_NC=0` selecciona COM-NO (por defecto); `=1` selecciona COM-NC. Es una constante de compilación exclusiva del receptor. Se comunica al emisor únicamente para informar del estado esperado. No se cambia desde Wi-Fi ni LoRa. La polaridad de la bobina es independiente.
+El portal consulta estado cada segundo. Esto no implica una nueva medición LoRa cada segundo. El botón **↻** solicita un intercambio nuevo; respeta colas, sueño y presupuesto de radio. Los datos remotos son la última observación recibida, con su antigüedad; una orden en espera no se muestra como aplicada.
 
-ABIERTO/CERRADO indica el estado esperado a partir de la orden eléctrica, **sin realimentación física**. Sin energía: NO queda abierto, NC cerrado. Deshabilitar el control automático desenergiza la bobina; por tanto su efecto depende del contacto cableado. Habilitar requiere `ARMAR`, información válida y ausencia de mantenimiento. Las políticas de activación, pérdida de enlace, pulsos y rearme se conservan. NC no implica una condición más segura; validar eléctricamente el montaje de banco antes de conectar una carga.
+### Sensor físico y control manual
 
-## Administración bidireccional y credenciales
+En la vista Emisor, **Desactivar sensor / modo manual** cambia el origen inmediatamente al usar Wi-Fi directo. MOJADO y SECO quedan habilitados en Prototipo. Se pueden repetir, también con el sensor desconectado: AO/DO se siguen mostrando para diagnóstico pero no gobiernan el estado manual. Cada orden solicita un informe nuevo, incluso si repite el mismo estado.
 
-Desde TX se configuran los pulsos, habilitación y políticas RX. Desde RX se consultan y ajustan umbrales, lectura, confirmación, telemetría, suspensión, modo y DO de TX. La configuración operativa TX se guarda en una entrada NVS atómica. Las órdenes sensibles muestran Pendiente de envío, Esperando dispositivo, Pendiente de confirmación, Aplicada, Rechazada o Sin confirmación. Aplicada significa que el remoto validó y guardó; un envío de radio por sí solo no la confirma.
+Una trama en vuelo conserva su contenido y secuencia. Si se pide otro estado mientras espera ACK, se transmite después el último estado solicitado; los cambios rápidos se agrupan y una lluvia pendiente se conserva. El ACK anterior no confirma una orden posterior. Se distingue **pendiente**, **confirmado** y **rechazado**. Repetir MOJADO no crea por sí solo otro episodio: la actuación del relé sigue su política. Para un nuevo episodio, enviar SECO y luego MOJADO, esperando sus confirmaciones.
 
-Cada portal permite cambiar el SSID y contraseña de su equipo o del remoto. Usuario fijo `admin`; contraseña común a WPA2 y web: 16–63 caracteres ASCII imprimibles sin espacios, al menos una letra y un número. SSID de 1–32 caracteres ASCII imprimibles. El cambio de acceso es una única entrada atómica, independiente de la clave LoRa. Se programa un reinicio con 20 s de margen para confirmar/reintentar; el cambio puede interrumpir la salida RX. Conserva la contraseña introducida y reconecta al SSID nuevo. La consulta remota permite reconocer su SSID sin devolver la contraseña.
+Desde el Wi-Fi del receptor, seleccionar Emisor y consultar su configuración. Los botones esperan la respuesta LoRa autenticada del emisor antes de dar por aplicado el cambio de modo. La confirmación de aplicación en TX y la recepción de su estado en RX son pasos distintos. Si no hay confirmación, consultar de nuevo; no se supone que el cambio haya ocurrido. **Usar sensor físico** recupera la lectura AO, sin conservar una decisión de histéresis de la fase manual. El modo manual termina al reiniciar o pasar a producción.
 
-Recuperación física: con el firmware ya arrancado, mantener BOOT (GPIO0) pulsado cinco segundos y soltarlo antes del reinicio. No mantener BOOT al encender o resetear: eso inicia el cargador ROM. Se elimina solo el acceso personalizado y se genera una nueva contraseña aleatoria visible en OLED. No se borran emparejamiento, contadores de nonce, ajustes del relé ni grabaciones. No se imprimen contraseñas en serie.
+La calibración muestra AO (ADC 0–4095), DO y estado. Mojado si AO ≤ umbral de entrada; seco si AO ≥ umbral de salida. Los umbrales diferentes evitan oscilaciones. Prototipo aplica la próxima lectura; producción puede exigir estabilidad y retrasarse durante el sueño. AO no mide intensidad de precipitación y no permite diagnosticar con fiabilidad un sensor desconectado.
 
-Los mensajes de administración usan AES-256-GCM con clave derivada de la clave HMAC mediante HKDF-SHA256 y dominio independiente. El nonce de 96 bits combina dirección del emisor y contador de 64 bits; se reservan bloques atómicos de 1024 en NVS antes de utilizarlos, por lo que un reinicio no repite nonces. Sesión, origen, tipo, secuencia e identificador de transacción forman parte de los datos autenticados. Se rechazan sesiones ajenas, secuencias antiguas y paquetes alterados; se reutiliza la respuesta de una operación duplicada sin reaplicarla. Máximo tres intentos por operación; el dispositivo dormido espera su ventana. Confirmaciones perdidas no se presentan como éxito: consultar el remoto o usar la recuperación física.
+### OLED y mediciones de radio
 
-Los límites SSID/contraseña caben juntos en un mensaje cifrado de 100 bytes: una trama completa de 216 bytes, inferior al máximo LoRa de 255. No hace falta fragmentación para ninguna operación admitida; no se aceptan tamaños mayores. Estados ordinarios usan 88 bytes. Todos conservan HMAC, versión y presupuesto de tiempo en aire. Credenciales nunca se incluyen en CSV, diagnóstico o respuestas de aplicación.
+TX muestra MOJADO/SECO y **AO alineado a la derecha**, origen FISICO/MANUAL, ACK pendiente/OK y tiempo desde el último ACK. Abajo a la izquierda muestra `Rel ON/OFF` y tiempo desde el último cambio observado en una respuesta. Ese tiempo es una observación remota, no una medida exacta del momento eléctrico de RX. Sin datos: `Rel --`.
 
-## Compilación y comprobaciones
+RX muestra contacto esperado ABIERTO/CERRADO, lluvia y origen recibido, enlace, `Rel ON/OFF` y tiempo desde el cambio de activación lógica. Abajo aparece `Temp` y cuenta atrás, o `Temp --` si no hay temporizador en marcha (incluido rearme pendiente). Para tiempos en estado: segundos hasta 3600 s, después minutos hasta 1440 min, después horas. La cuenta atrás usa unidades compactas. El porcentaje conserva una zona propia sin solaparse con esos textos.
 
-ESP32 3.3.2, RadioLib 7.8.1, U8g2 2.36.17; biblioteca compartida `libraries/RainLink`. No se necesita `pair_key.h` para compilar. Para NC añadir `--build-property compiler.cpp.extra_flags=-DRAIN_CONTACT_NC=1`. CI comprueba lógica, contactos NO/NC, estimación de calidad, interfaz y HKDF/AES-GCM (ida y vuelta y alteración de cifrado, tag, nonce, AAD y clave), compila las tres variantes y solo después publica los binarios públicos de desarrollo. No se publica una versión estable sin pruebas en placas.
+`Rel ON` significa **activación lógica del relé**, según la polaridad elegida, y no necesariamente bobina energizada. ABIERTO/CERRADO se calcula a partir de la orden y contacto NO/NC: no existe realimentación física.
 
-## Registro y comportamiento conservados
+Calidad estimada: 35 % RSSI normalizado entre −125 y −65 dBm, 25 % SNR entre −12 y +10 dB, 40 % confirmaciones sobre intentos reales. Cada componente se limita a 0–100. En RX la entrega se estima a partir de recepciones autenticadas; no conoce transmisiones que nunca recibió. `--%` significa sin datos vigentes. No es una medición calibrada de distancia o cobertura. RSSI menos negativo y SNR mayor suelen indicar mejor recepción.
 
-## Modos e interfaz
+## Relé y temporización
 
-El portal está en `192.168.4.1`, en la red `LLUVIA-TX-XXXX` o `LLUVIA-RX-XXXX`. Usuario `admin`; contraseña individual en OLED o consola serie. Se conserva entre reinicios.
+GPIO5 manda una etapa de control; no alimentar una bobina directamente desde el GPIO. `RAIN_CONTACT_NC=0` selecciona NO; `=1` selecciona NC al compilar. No se cambia por web o LoRa. `RAIN_RELAY_ACTIVE_HIGH=1` es el nivel de mando del GPIO por defecto. La acción lógica **activar relé** se configura de forma independiente: energizar o desenergizar la bobina.
 
-- **Prototipo:** emisor despierto, lectura continua, Wi-Fi y pantalla disponibles. Permite simular mojado/seco desde el emisor y volver al sensor físico. La simulación se identifica en pantalla, telemetría y CSV; no se conserva tras reiniciar ni al pasar a producción.
-- **Producción:** lectura al despertar y suspensión configurable. Umbrales de mojado/seco y tiempo de confirmación configurables. El portal abre durante tres minutos al arrancar; un despertar periódico no lo reabre. DO puede despertar la placa únicamente tras validar cableado y polaridad.
-- Pantalla y Wi-Fi se pueden apagar desde el portal. Reiniciar vuelve a abrir Wi-Fi; en el receptor también interrumpe su salida.
+- **Un pulso por episodio:** primera transición mojada o evento de lluvia pendiente; permanecer mojado no repite el pulso.
+- **Prolongar mientras esté mojado:** mantiene activación con la última lectura mojada vigente; tras seco, termina el tiempo pendiente desde la última renovación.
+- **Repetir al terminar:** la siguiente lectura mojada recibida inicia otro pulso al acabar el anterior.
 
-La vista principal muestra confirmación de enlace, antigüedad, origen de la lectura y estado comunicado del receptor. Los ajustes y la telemetría completa están en secciones desplegables. La página se actualiza cada segundo; **la telemetría LoRa solo cambia con un intercambio real**. El estado del relé procede de la orden GPIO, sin realimentación del contacto físico.
+Duración en horas, minutos, segundos y milisegundos; admite cero, sin límite de horas añadido. El total es un entero sin signo de 64 bits; se rechazan desbordamientos. Cero confirma el evento sin producir pulso. La resolución configurada de 1 ms no garantiza precisión mecánica de 1 ms.
 
-## Activar relé
+Al perder LoRa: **conservar salida**, **activar relé** o **desactivar relé**. El tiempo de pérdida debe superar el intervalo de informes, incluido sueño. Conservar congela la salida hasta recuperar comunicación aunque venza el pulso. Al recuperar una lectura se aplica la lógica configurada.
 
-«Activar» es una acción lógica, configurable para energizar o desenergizar la bobina. El dispositivo arranca desarmado en una configuración nueva y requiere escribir `ARMAR` para habilitar la salida.
+Deshabilitar el control desenergiza la bobina: abre NO y cierra NC. Un reinicio también desenergiza la salida. Una activación guardada se restaura pendiente de rearme manual, con sensor seco y enlace vigente. Cambiar ajustes durante una activación exige rearme; no la libera implícitamente. Una tarea independiente atiende la salida mientras web o radio bloquean el bucle principal. La configuración nueva requiere `ARMAR` antes de habilitar.
 
-Duración en horas, minutos, segundos y milisegundos, sin un límite de horas añadido por la aplicación. Se admite cero: confirma el evento sin producir pulso. La duración total se representa con un entero sin signo de 64 bits; se rechazan desbordamientos y valores no numéricos. La resolución configurada de 1 ms no garantiza esa precisión en el contacto mecánico.
+## Registro de experimentos
 
-Comportamientos:
+Conectar al Wi-Fi del emisor y pulsar **Grabar**. No se introducen etiquetas. Se guarda una muestra cada segundo más eventos de sensor, cambios de modo, órdenes manuales, envío, ACK, expiraciones, sesiones y ajustes. El registrador principal es el emisor, sin servicio GPS externo.
 
-1. **Un pulso por episodio:** la primera transición a mojado activa el relé. Permanecer mojado no lo vuelve a activar.
-2. **Prolongar mientras esté mojado:** mantiene la activación con la última lectura mojada vigente; al confirmar seco, termina el tiempo que quedase desde la última renovación. La lectura deja de ser vigente al vencer el tiempo de pérdida de enlace.
-3. **Repetir tras finalizar:** termina el pulso y vuelve a activar al recibir la siguiente lectura mojada. El intervalo entre lecturas determina la separación entre pulsos.
+Se guarda **una grabación de hasta 1 MiB en LittleFS**, aunque se desconecte el móvil. Sobrevive a reinicios, pero un reinicio detiene la sesión: no continúa automáticamente. Al llenar memoria o fallar una escritura se detiene e indica el motivo. Detener cierra el archivo; Descargar también lo cierra primero para entregar una copia consistente. Antes de sustituirlo se ofrece descargar el anterior y confirmar la sustitución.
 
-Al perder enlace: conservar la salida, activar el relé o desactivarlo. Tiempo de detección configurable; debe ser mayor que el intervalo de informes del emisor, incluido el sueño. Al recuperar una lectura se vuelve a aplicar la lógica configurada. «Conservar» congela la salida física hasta recuperar comunicación, incluso si vence un pulso.
+Inicio UTC tomado automáticamente del reloj del navegador. Nombre: `rain_2026-11-24T12-00-00.000Z_123456ms.csv`, con inicio y duración. La exactitud de la fecha depende del reloj del cliente. Cada fila incluye inicio UTC y milisegundos transcurridos. Se conservan las 29 columnas existentes: AO/DO, estado y origen, batería, antigüedad ACK, RSSI/SNR en ambos sentidos, envíos/confirmaciones/reintentos, RTT, último estado/configuración RX, tiempo restante, evento y presupuesto de radio. Los datos RX son los del último ACK, no muestras nuevas por cada fila.
 
-Un reinicio desenergiza la salida. Una activación guardada se restaura pendiente de rearme manual, con sensor seco y enlace vigente. Cambiar ajustes durante una activación también exige rearme; no la libera implícitamente. El temporizador se atiende en una tarea independiente del servidor web y las transmisiones bloqueantes.
+Eventos añadidos: `sensor_manual`, `sensor_physical`, `manual_wet`, `manual_dry`, `sensor_command_ack`, `sensor_command_rejected`, `sensor_physical_production`. Las órdenes remotas se registran en el mismo CSV del emisor y añaden `remote_change_applied`. Nunca se graban credenciales.
 
-Desde el portal del emisor se puede configurar el receptor. Una orden queda pendiente hasta su confirmación autenticada; el panel muestra si fue confirmada o rechazada. La configuración del modo y la pantalla es local a cada dispositivo.
+Si aparece **Memoria no preparada**, inicializar desde el portal escribiendo `BORRAR MEMORIA`. No se formatea automáticamente para preservar datos. Formatear elimina cualquier grabación anterior. OTA y paso a producción cierran la grabación.
 
-## Experimentos y CSV
+## Administración y recuperación
 
-1. Conectar un móvil u ordenador al Wi-Fi del emisor y pulsar **Grabar**. No hay que introducir etiquetas ni otros datos.
-2. Se registra una muestra por segundo y filas adicionales con cambios del sensor, simulación, envíos, ACK, reintentos, cambios de sesión y ajustes. Los datos del receptor son su última respuesta comunicada, con antigüedad explícita.
-3. **Detener** cierra la grabación. **Descargar CSV** también detiene primero la grabación, para descargar un archivo consistente.
-4. Antes de sustituirla, el diálogo ofrece descargar la anterior y confirmar la sustitución.
+TX configura por LoRa pulso y políticas de RX. RX consulta y ajusta sensor, intervalos y modo de TX; también sus pruebas manuales. Ambos pueden cambiar el SSID y contraseña del otro. Las respuestas de configuración y modo contienen el estado aplicado; la interfaz no reutiliza una consulta antigua como confirmación.
 
-El archivo se guarda en LittleFS del emisor: sobrevive a desconexiones Wi-Fi y reinicios. Una sola grabación, limitada a 1 MiB; al llenarse o fallar una escritura se detiene y se indica el motivo. El inicio se toma automáticamente del reloj del navegador y se guarda en UTC. Ejemplo de nombre: `rain_2026-11-13T12-00-00.000Z_123456ms.csv`. El sufijo indica la duración; cada fila contiene también inicio UTC y milisegundos transcurridos. La exactitud de la fecha depende del reloj del dispositivo conectado.
+Usuario web fijo `admin`; contraseña compartida para su Wi-Fi y web, 16–63 ASCII sin espacios, con letras y números. SSID de 1–32 ASCII imprimibles. Se guardan juntos, de forma atómica, sin modificar la clave LoRa. Se programa reinicio 20 s después para permitir confirmar y reintentar. Conservar la nueva contraseña y reconectar al SSID nuevo. No se devuelve la contraseña en diagnóstico ni se imprime en serie.
 
-En el primer uso, si la memoria aparece sin preparar, se puede inicializar desde la sección correspondiente escribiendo `BORRAR MEMORIA`. Nunca se formatea automáticamente al fallar el montaje, para preservar posibles datos. Si la partición está dañada, formatearla elimina cualquier grabación anterior. Durante OTA o al pasar a producción se cierra la grabación.
+Para recuperar acceso: con el firmware ya arrancado, mantener BOOT (GPIO0) cinco segundos y soltar antes del reinicio. No mantenerlo al encender/resetear porque inicia el cargador ROM. Se borra solo el acceso personalizado y se genera otra contraseña visible en OLED; se conservan clave LoRa, contadores de nonce, ajustes y CSV.
 
-Columnas: tiempo, evento, AO/DO, estado y origen, batería, antigüedad del ACK, RSSI/SNR en ambos sentidos, envíos, confirmaciones, reintentos, expiraciones, tiempo de ida y vuelta, flags y configuración del receptor, tiempo de pulso restante, evento pendiente y presupuesto de radio.
+[Protocolo, autenticación y persistencia](docs/PROTOCOL.md) · [Pruebas y aceptación en placas](docs/VALIDATION.md) · [Historial](CHANGELOG.md).
 
-## Radio y recuperación
-
-868,3 MHz, BW125, SF7, CR4/5, 10 dBm. HMAC-SHA256 truncado a 128 bits; la administración usa además AES-GCM. Sesión con desafío aleatorio ligado a un nonce del emisor y números de secuencia. No depende de contadores crecientes en flash: borrar ajustes del emisor no lo bloquea por tener un contador menor. La clave compartida debe seguir coincidiendo.
-
-La lluvia pendiente se conserva hasta recibir confirmación, aunque el sensor vuelva a seco. Se guarda en NVS al producirse y confirmarse el evento; varios episodios durante una interrupción se agrupan en una activación pendiente. Las retransmisiones conservan el contenido y secuencia originales; no sustituyen un evento en vuelo.
-
-Se calcula el tiempo de emisión con RadioLib y se aplica un presupuesto de **30 segundos en cualquier ventana móvil de una hora**, por nodo. El historial se conserva en RAM RTC durante deep sleep. Reiniciar por pérdida de alimentación reinicia este historial; el límite es una protección de ingeniería y no una certificación de conformidad radioeléctrica. Las búsquedas sin receptor se espacian progresivamente. Se muestra la espera por presupuesto en la interfaz; no se presenta como fallo de cobertura.
-
-El intervalo de informes por defecto es 30 s para dejar margen a eventos y reintentos con SF7. Reducirlo acelera los intercambios mientras quede presupuesto; puede provocar esperas posteriores. RSSI/SNR y confirmaciones son mediciones; no se ofrece un porcentaje ficticio de cobertura.
-
-Referencias de implementación: [tiempo de emisión de RadioLib](https://jgromes.github.io/RadioLib/class_s_x126x.html) y [reloj RTC durante suspensión de ESP32-S3](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/api-reference/system/system_time.html).
-
-## Pines previstos
+## Pines
 
 | Función | GPIO Heltec V3 |
 |---|---|
 | SX1262 NSS / SCK / MOSI / MISO | 8 / 9 / 10 / 11 |
 | SX1262 RST / BUSY / DIO1 | 12 / 13 / 14 |
 | OLED SDA / SCL / RST | 17 / 18 / 21 |
-| Vext (activo LOW) | 36 |
-| Emisor: sensor AO / DO opcional | 4 / 2 |
-| Receptor: mando del transistor NPN | 5 |
+| Vext, activo LOW | 36 |
+| TX: AO / DO opcional | 4 / 2 |
+| RX: mando del relé, activo HIGH por defecto | **5** |
 | Batería: ADC / control del divisor | 1 / 37 |
 
-Sensor previsto a 3,3 V. La polaridad del divisor de batería depende de la revisión de placa; si no se identifica, se comunica batería desconocida. El firmware no verifica continuidad del sensor. Un sensor desconectado no puede diagnosticarse de forma fiable únicamente con estos umbrales.
+Sensor previsto a 3,3 V. El control del divisor de batería depende de la revisión; si no se identifica se comunica 0 = desconocida, no batería descargada. Pines de firmware y GPIO5 del receptor confirmados; validar montaje, nivel del módulo y contacto antes de conectar una carga.
 
-GPIO5 controla una etapa NPN, no una bobina directamente. Revisar polaridad, resistencias, alimentación del módulo y contactos antes de armar. Este listado es una asignación de firmware; el esquema eléctrico y el montaje siguen pendientes de validación.
+## Compilar y contribuir
 
-## Comprobaciones
+Dependencias fijadas: Arduino-ESP32 **3.3.2**, RadioLib **7.8.1**, U8g2 **2.36.17**. Biblioteca compartida `libraries/RainLink`. No hace falta archivo de claves para compilar. Desde la raíz del repo:
 
 ```sh
-node tests/portal_test.mjs
-c++ -std=c++17 -Wall -Wextra -Werror -I libraries/RainLink/src tests/logic_test.cpp -o rain-logic-test
-./rain-logic-test
+arduino-cli core update-index --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+arduino-cli core install esp32:esp32@3.3.2 --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+arduino-cli lib install 'RadioLib@7.8.1' 'U8g2@2.36.17'
+arduino-cli compile --fqbn esp32:esp32:heltec_wifi_lora_32_V3 --libraries libraries --output-dir build/TX Emisor
+arduino-cli compile --fqbn esp32:esp32:heltec_wifi_lora_32_V3 --libraries libraries --output-dir build/RX Receptor
+arduino-cli compile --fqbn esp32:esp32:heltec_wifi_lora_32_V3 --libraries libraries --build-property compiler.cpp.extra_flags=-DRAIN_CONTACT_NC=1 --output-dir build/RX-NC Receptor
 ```
 
-GitHub Actions ejecuta pruebas de duración, detección, pulsos y presupuesto de radio, comprueba la interfaz y compila ambos sketches con claves temporales. No publica binarios ni claves. En Windows estos comandos de C++ generan un ejecutable; no son necesarios para consultar ni editar el proyecto.
-
-Pendiente de comprobar en placas: consumo, memoria disponible, persistencia real, sueño/DO, OTA, polaridad y tiempos del relé, recuperación de cortes y enlace prolongado. La compilación no sustituye estas mediciones.
+GitHub Actions ejecuta lógica con sanitizadores, regresión de funciones reales TX, interfaz Node y criptografía, y compila las tres imágenes. Pull requests y rama de trabajo solo validan; **main publica una nueva versión de desarrollo si su etiqueta todavía no existe**. Las versiones publicadas no se sobrescriben. Para publicar la siguiente, incrementar `FW_VERSION` y actualizar notas, historial y enlaces de descarga. Los `.bin` están en Releases, no en el árbol de fuentes. En Windows las pruebas Node no generan ejecutables nuevos; las C++ se ejecutan en Linux CI.
 
 ## Licencia
 

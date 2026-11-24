@@ -7,6 +7,33 @@ int main() {
   assert(rain::contactClosed(true,false));assert(!rain::contactClosed(true,true));
   assert(rain::quality(-80,10,false,10,10)==-1);
   assert(rain::quality(-80,10,true,10,10)>rain::quality(-120,-10,true,2,10));
+  rain::SensorInput input;
+  assert(!input.manual && !input.wet(false));
+  assert(!input.select(rain::MANUAL_WET,true,false));
+  assert(!input.select(rain::MANUAL,false,false));
+  assert(input.select(rain::MANUAL,true,false));
+  assert(input.manual && input.pending && !input.wet(true)); // ignore even disconnected AO/DO
+  const auto oldRevision=input.revision;
+  assert(input.select(rain::MANUAL_WET,true,false));
+  assert(input.wet(false));
+  assert(!input.acknowledge(oldRevision,false) && input.pending); // previous frame ACK
+  assert(!input.acknowledge(input.revision,true) && input.pending); // rejected != confirmed
+  assert(input.acknowledge(input.revision,false) && !input.pending);
+  for(int i=0;i<5;++i){
+    auto revision=input.revision;
+    assert(input.select(rain::MANUAL_WET,true,false));
+    assert(input.revision!=revision && input.pending && input.wet(false));
+    assert(input.acknowledge(input.revision,false));
+    assert(input.select(rain::MANUAL_DRY,true,true) && !input.wet(true));
+    assert(input.acknowledge(input.revision,false));
+  }
+  assert(input.select(rain::PHYSICAL,true,false));
+  assert(!input.manual && input.wet(true) && !input.wet(false));
+  assert(!input.select(255,true,true));
+  assert(rain::stateAgeValue(3600000)==3600);
+  assert(rain::stateAgeValue(3600001)==60);
+  assert(rain::stateAgeValue(86400000)==1440);
+  assert(rain::stateAgeValue(86400001)==24);
   uint64_t n;
   assert(rain::decimal("18446744073709551615", n) && n == UINT64_MAX);
   assert(!rain::decimal("18446744073709551616", n));
