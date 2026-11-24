@@ -3,11 +3,13 @@
 #include <string>
 #include <vector>
 #include <iostream>
+#include <cstring>
+#include "management_types.h"
 using String = std::string;
 constexpr uint8_t FRAME_STATE=1,STATE_SIMULATED=2,PIN_RAIN_DO=2;
-constexpr uint32_t TX_ID=1;
-struct RainFrame { uint8_t wet=0,flags=0; uint16_t ao=0,batteryMv=0; uint32_t seq=0,event=0,ackSeq=0; };
-RainFrame newFrame(uint8_t,uint32_t,uint32_t,uint32_t seq,uint64_t){RainFrame f;f.seq=seq;return f;}
+constexpr uint32_t TX_ID=1,RX_ID=2;
+struct RainFrame { uint8_t type,wet,flags; uint16_t ao,batteryMv; uint32_t seq,event,ackSeq,sender; uint64_t session; uint8_t payload[128]; };
+RainFrame newFrame(uint8_t type,uint32_t sender,uint32_t,uint32_t seq,uint64_t session){RainFrame f{};f.seq=seq;f.type=type;f.sender=sender;f.session=session;return f;}
 rain::Detector detector;
 rain::SensorInput sensorInput;
 rain::PendingRain rainEvent;
@@ -25,6 +27,27 @@ uint16_t readRain(){return adc;}
 int digitalRead(uint8_t){return adc<3500?0:1;}
 void recordEvent(const char *event){events.emplace_back(event);}
 void latchRainEvent(){rainEvent.raise(42);}
+bool coreDisplayEnabled=true,doWakeEnabled=false,coreMaintenance=false;
+uint32_t ackedStates=0,coreTxCount=0,authRejects=0,coreTxErrors=0;
+struct {uint32_t getFreeHeap(){return 1024;}} ESP;
+String coreRole="TX",coreApSsid="test-TX",mgState,mgPeerSsid;
+uint64_t mgSession=0,mgLastReply=0;
+uint32_t mgHighest=0,mgSequence=0,managementOwnBoot=1;
+bool mgHaveCache=false,mgWaiting=false,mgPeerKnown=false;
+RainFrame mgCached{},mgPending{};
+Operational mgPeer{};
+bool (*managementApplyTest)(uint8_t)=nullptr;
+uint32_t localId(){return coreRole=="TX"?TX_ID:RX_ID;}
+uint64_t managementSession(){return sessionId;}
+bool mgOpen(const RainFrame &f,ManagementData &d){memcpy(&d,f.payload,sizeof(d));return true;}
+bool mgSeal(RainFrame &f,const ManagementData &d){memcpy(f.payload,&d,sizeof(d));return true;}
+void delay(int){}
+void (*managementOnRx)()=nullptr;
+void transmitFrame(const RainFrame &,void(*)()){}
+void managementRxAction(){}
+bool saveAccess(const char *,const char *){return true;}
+bool applyOperational(const Operational &){return true;}
+Operational getOperational();
 #include "tx_functions.h"
 int main(){
   updateSensor(true);
@@ -58,5 +81,26 @@ int main(){
   bool manual=false,wet=false,dry=false,physical=false;
   for(const auto &event:events){manual|=event=="sensor_manual";wet|=event=="manual_wet";dry|=event=="manual_dry";physical|=event=="sensor_physical";}
   assert(manual && wet && dry && physical);
+  // Exercise the actual management dispatcher in both directions, not just JSON fixtures.
+  corePrototype=true;coreRole="TX";managementApplyTest=applyManualSelection;
+  ManagementData command{};command.kind=4;command.bytes[0]=rain::MANUAL;
+  RainFrame request=newFrame(7,RX_ID,1,1,sessionId);request.event=100;mgSeal(request,command);
+  assert(managementProcess(request));
+  assert(sensorInput.manual && mgHaveCache);
+  ManagementData reply{};mgOpen(mgCached,reply);
+  Operational applied{};memcpy(&applied,reply.bytes,sizeof(applied));
+  assert(reply.kind==4 && reply.result && applied.simulated && (applied.reserved&1));
+  auto revision=sensorInput.revision;
+  managementProcess(request);assert(sensorInput.revision==revision); // duplicate must not apply again
+  coreRole="RX";mgWaiting=true;mgPending.event=100;
+  assert(managementProcess(mgCached));
+  assert(mgPeerKnown && mgPeer.simulated && (mgPeer.reserved&1) && !mgWaiting && mgState=="Aplicada");
+  coreRole="TX";request.seq=2;request.event=101;command.bytes[0]=rain::PHYSICAL;mgSeal(request,command);
+  assert(managementProcess(request));mgOpen(mgCached,reply);memcpy(&applied,reply.bytes,sizeof(applied));
+  assert(reply.result && !applied.simulated);
+  coreRole="RX";mgWaiting=true;mgPending.event=101;managementProcess(mgCached);
+  assert(!mgPeer.simulated && mgState=="Aplicada");
+  coreRole="TX";corePrototype=false;request.seq=3;request.event=102;command.bytes[0]=rain::MANUAL;mgSeal(request,command);
+  managementProcess(request);mgOpen(mgCached,reply);assert(!reply.result && !sensorInput.manual);
   std::cout << "Actual TX functions: mode, disconnected ADC, repeated states, immutable packets, ACK revision and CSV events passed\n";
 }

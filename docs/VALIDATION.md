@@ -5,7 +5,7 @@
 El workflow `Firmware checks` es el punto de entrada completo: ejecuta pruebas y compila TX, RX-NO y RX-NC (GPIO5). Solo publica desde main cuando no existe la versión. Dependencias fijadas en el workflow.
 
 - `tests/logic_test.cpp`: entradas manuales, revisiones y ACK rechazado/antiguo, contactos NO/NC, duraciones de 64 bits, detector e histéresis, pulsos, rearme, pérdida de enlace y presupuesto móvil.
-- `tools/test_firmware.py` + `tests/firmware_test.cpp`: extrae las funciones reales `wetNow`, `queueState`, `updateSensor` y `applyManualSelection` del sketch TX y las ejecuta con radio/ADC deterministas. Comprueba sensor desconectado, repetición, cambio durante trama en vuelo, retorno a físico y eventos CSV. No sustituye un controlador de radio real.
+- `tools/test_firmware.py` + `tests/firmware_test.cpp`: extrae las funciones reales `wetNow`, `queueState`, `updateSensor` , `applyManualSelection`, `getOperational` del sketch TX y `managementProcess` de administración y las ejecuta con radio/ADC deterministas. Comprueba sensor desconectado, repetición, cambio durante trama en vuelo, retorno a físico y eventos CSV. También comprueba las respuestas de modo aplicado, rechazo y duplicados pasando por el gestor real de ambos roles. No sustituye un controlador de radio real.
 - `tests/portal_test.mjs`: ejecuta el JavaScript del portal para ambos anfitriones; modo manual local/remoto, respuesta aplicada frente a datos físicos anteriores, pendientes, selección, telemetría y CSRF. No simula la propagación LoRa.
 - `tests/crypto_test.cpp`: derivación y AES-GCM, alteraciones de cifrado, tag, nonce, AAD y clave.
 

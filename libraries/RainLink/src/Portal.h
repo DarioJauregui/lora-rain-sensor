@@ -3,8 +3,8 @@
 static const char PORTAL_HTML[] PROGMEM = R"HTML(<!doctype html>
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>LoraRainSensor</title><style>
-:root{--surface:#fff;--field:#fff;--page:#f3f6f8;--metric:#f5f8fa;--tx:#1767b5;--rx:#b65a0a}
-:root[data-theme=dark]{color-scheme:dark;--surface:#182630;--field:#1f333f;--page:#101b23;--metric:#20323f;--ink:#edf4f7;--muted:#adc0cd;--line:#3a4e5b;--accent:#298494}
+:root{--active-ink:#fff;--surface:#fff;--field:#fff;--page:#f3f6f8;--metric:#f5f8fa;--tx:#1767b5;--rx:#b65a0a}
+:root[data-theme=dark]{color-scheme:dark;--active-ink:#122433;--surface:#182630;--field:#1f333f;--page:#101b23;--metric:#20323f;--ink:#edf4f7;--muted:#adc0cd;--line:#3a4e5b;--accent:#298494}
 body[data-view="TX"]{--page:#eaf2fa;--accent:var(--tx)}body[data-view="RX"]{--page:#fff1e5;--accent:var(--rx)}
 :root[data-theme=dark] body[data-view="TX"]{--page:#0c1d2d;--tx:#70b8ff}
 :root[data-theme=dark] body[data-view="RX"]{--page:#2b1b0f;--rx:#ffb574}
@@ -13,7 +13,7 @@ main[data-view="TX"]{--accent:var(--tx)}main[data-view="RX"]{--accent:var(--rx)}
 .device-choice{position:relative;text-align:left;border:2px solid var(--node);border-radius:12px;padding:11px 15px;background:var(--surface);color:var(--ink);min-width:0}
 .device-choice.tx{--node:var(--tx)}.device-choice.rx{--node:var(--rx)}
 .device-choice strong{display:block;color:var(--node);font-size:16px}.device-choice small{display:block;margin-top:4px}
-.device-choice.active{background:var(--node);color:#fff}.device-choice.active strong,.device-choice.active small{color:#fff}
+.device-choice.active{background:var(--node);color:var(--active-ink)}.device-choice.active strong,.device-choice.active small{color:var(--active-ink)}
 .device-choice .connection-icon{font-size:11px;font-weight:700}
 .view-context{display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;padding:4px 2px 10px;font-size:12px;color:var(--muted)}
 #viewContext{color:var(--accent);font-weight:700}.telemetry-group{margin:8px 0;padding:10px 12px}
@@ -44,7 +44,7 @@ dialog::backdrop{background:#0008}dialog p{line-height:1.6}#helpClose{width:100%
 .help{padding:0;border:0;margin-top:0;margin-bottom:0}.help p{position:absolute;z-index:3;top:20px;right:0;width:min(280px,75vw);padding:12px;background:#192b36;color:white;border-radius:7px;font-size:13px;box-shadow:0 4px 20px #0003}
 table{width:100%;border-collapse:collapse;font-size:13px}td{padding:7px;border-bottom:1px solid var(--line);overflow-wrap:anywhere}td:last-child{text-align:right}
 #notice{padding:10px 0;min-height:38px}#connection{font-size:13px}.error{color:#9f2929}input[type=file]{width:auto}
-@media(max-width:520px){input,select{font-size:16px;min-height:48px}button,.button{min-height:48px}.info{min-height:44px;width:44px}.actions{align-items:stretch}.actions>button,.actions>.button{flex:1 1 140px}.grid{gap:16px}.time-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.device-choice{padding:8px 12px}.device-selector{gap:8px}.device-selector button{min-height:64px}.device-choice strong{font-size:15px}.metric{padding:12px}.metric small{display:block;overflow-wrap:anywhere}.telemetry-group td:first-child{width:64%}.help>summary{min-height:44px;width:44px}.time-grid label{font-size:11px;overflow-wrap:anywhere}.time-grid input{padding:7px;}main{padding:12px}section,details{padding:14px}.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.metric b{font-size:19px}header{align-items:start;flex-direction:column}}
+@media(max-width:520px){form .grid{grid-template-columns:minmax(0,1fr)}.actions>#refreshLink{flex:0 0 48px;margin-left:auto}.actions>h2{margin:0}input,select{font-size:16px;min-height:48px}button,.button{min-height:48px}.info{min-height:44px;width:44px}.actions{align-items:stretch}.actions>button,.actions>.button{flex:1 1 140px}.grid{gap:16px}.time-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.device-choice{padding:8px 12px}.device-selector{gap:8px}.device-selector button{min-height:64px}.device-choice strong{font-size:15px}.metric{padding:12px}.metric small{display:block;overflow-wrap:anywhere}.telemetry-group td:first-child{width:64%}.help>summary{min-height:44px;width:44px}.time-grid label{font-size:11px;overflow-wrap:anywhere}.time-grid input{padding:7px;}main{padding:12px}section,details{padding:14px}.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.metric b{font-size:19px}header{align-items:start;flex-direction:column}}
 </style></head><body><main data-role="__ROLE__" data-view="__ROLE__">
 <nav class="device-selector" aria-label="Seleccionar dispositivo">
 <button class="device-choice tx" id="selectTx" type="button" aria-pressed="false"><strong>Emisor · TX</strong><small class="connection-icon" id="accessTx">...</small></button>
