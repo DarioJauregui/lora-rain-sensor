@@ -8,6 +8,7 @@
 #include <WebServer.h>
 #include <Update.h>
 #include <Preferences.h>
+#include <LittleFS.h>
 #include <mbedtls/md.h>
 #include <mbedtls/gcm.h>
 #include <mbedtls/hkdf.h>
@@ -21,7 +22,7 @@
 #include "Portal.h"
 
 // Version shared by the two devices; Arduino-ESP32 core 3.3.2, RadioLib 7.8.1.
-static const char *FW_VERSION = "1.2.2-prototype";
+static const char *FW_VERSION = "1.2.3-prototype";
 static const uint32_t PROTOCOL_MAGIC = 0x52414E39UL;
 static const uint8_t PROTOCOL_VERSION = 3;
 static const uint32_t TX_ID = 0x54583031UL;
@@ -106,7 +107,46 @@ std::atomic<bool> coreMaintenance{false};
 bool coreApActive = false;
 uint32_t coreCloseAtMs = 0;
 uint32_t coreTxCount = 0, coreTxErrors = 0, coreDutyDeferrals = 0;
+uint64_t uptimeMs();
+uint64_t rtcTimeMs();
+String u64(uint64_t n);
 uint32_t coreFrameAirtimeMs = 650;
+uint32_t coreRadioRecoveries=0, coreRadioRecoveryFailures=0;
+uint64_t coreLastRadioRecoveryMs=0;
+bool coreLogReady=false;
+uint8_t coreLogSlot=0;
+static constexpr size_t CORE_LOG_SEGMENT_LIMIT=16384;
+const char *coreLogPath(uint8_t slot){return slot?"/diag1.csv":"/diag0.csv";}
+void coreInitLog(bool filesystemMounted=false){
+  coreLogReady=filesystemMounted || LittleFS.begin(false); // Never format existing data.
+  if(!coreLogReady)return;
+  Preferences p;if(p.begin("rainlog",true)){coreLogSlot=p.getUChar("slot",0)&1;p.end();}
+}
+void coreLogEvent(const char *event,int32_t value=0){
+  if(!coreLogReady||!event)return;
+  if(!strcmp(event,"sample")||!strcmp(event,"tx")||!strcmp(event,"ack")||!strcmp(event,"radio_ok"))return;
+  uint64_t utc=rtcTimeMs();if(utc<1577836800000ULL)utc=0;
+  String row=(utc?u64(utc):String(""))+","+u64(uptimeMs())+","+coreRole+","+event+","+String(value)+"\n";
+  File f=LittleFS.open(coreLogPath(coreLogSlot),"a");
+  if(!f)return;
+  if(f.size()+row.length()>CORE_LOG_SEGMENT_LIMIT){
+    f.close();const uint8_t next=coreLogSlot^1;
+    if(LittleFS.exists(coreLogPath(next))&&!LittleFS.remove(coreLogPath(next)))return;
+    Preferences p;if(!p.begin("rainlog",false))return;
+    const bool stored=p.putUChar("slot",next)==1;p.end();if(!stored)return;
+    coreLogSlot=next;f=LittleFS.open(coreLogPath(coreLogSlot),"w");if(!f)return;
+  }
+  f.print(row);f.close();
+}
+size_t coreLogBytes(){if(!coreLogReady)return 0;size_t n=0;for(uint8_t i=0;i<2;++i){File f=LittleFS.open(coreLogPath(i),"r");if(f){n+=f.size();f.close();}}return n;}
+String corePairFingerprint(){
+  if(!corePaired)return "SIN CLAVE";
+  uint8_t digest[32]{};
+  mbedtls_md(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256),PAIR_KEY,sizeof(PAIR_KEY),digest);
+  char out[9];snprintf(out,sizeof(out),"%02X%02X%02X%02X",digest[0],digest[1],digest[2],digest[3]);
+  memset(digest,0,sizeof(digest));return String(out);
+}
+
 uint64_t uptimeMs() { return (uint64_t)esp_timer_get_time() / 1000; }
 uint64_t rtcTimeMs() { timeval t; gettimeofday(&t, nullptr); return (uint64_t)t.tv_sec * 1000 + t.tv_usec / 1000; }
 String u64(uint64_t n) { char b[24]; snprintf(b, sizeof(b), "%llu", (unsigned long long)n); return String(b); }
@@ -239,6 +279,17 @@ int16_t transmitFrame(RainFrame &f, void (*onRx)(void)) {
   return rc;
 }
 
+bool coreRecoverRadio(void (*onRx)(void),const char *reason){
+  const uint64_t now=uptimeMs();
+  if(coreMaintenance||coreOtaInProgress||now-coreLastRadioRecoveryMs<60000ULL)return false;
+  coreLastRadioRecoveryMs=now;
+  ++coreRadioRecoveries;
+  const bool ok=initRadio(onRx);
+  if(!ok)++coreRadioRecoveryFailures;
+  coreLogEvent(ok?"radio_recovery_ok":"radio_recovery_error",ok?0:-1);
+  Serial.printf("Radio recovery: %s, result=%d\n",reason?reason:"unknown",ok);
+  return ok;
+}
 bool readFrame(RainFrame &f) {
   size_t length=radio.getPacketLength();uint8_t wire[255];
   if(length!=88&&length!=216){if(length<=255)radio.readData(wire,length);else radio.standby();return false;}
@@ -376,6 +427,27 @@ void coreHandleUpload() {
 
 void coreConfigureWeb() {
   managementRoutes();
+  web.on("/time",HTTP_POST,[](){
+    if(!corePostAllowed())return;uint64_t epoch;
+    if(!readUnsigned("epoch_ms",epoch)||epoch<1577836800000ULL||epoch>4102444800000ULL){web.send(400,"text/plain","Marca temporal UTC invalida");return;}
+    timeval tv{};tv.tv_sec=epoch/1000;tv.tv_usec=(epoch%1000)*1000;
+    if(settimeofday(&tv,nullptr)!=0){web.send(500,"text/plain","No se pudo sincronizar");return;}
+    web.send(200,"text/plain","Hora sincronizada");
+  });
+  web.on("/logs.csv",HTTP_GET,[](){
+    if(!coreIsAuthenticated())return;
+    if(!coreLogReady){web.send(503,"text/plain","Registro no disponible");return;}
+    web.sendHeader("Content-Disposition","attachment; filename=\"LoraRainSensor-"+coreRole+"-logs.csv\"");
+    web.setContentLength(CONTENT_LENGTH_UNKNOWN);
+    web.send(200,"text/csv; charset=utf-8","timestamp_utc_ms,uptime_ms,role,event,value\n");
+    for(uint8_t i=0;i<2;++i){
+      File f=LittleFS.open(coreLogPath((coreLogSlot+1+i)&1),"r");
+      if(!f)continue;
+      while(f.available()){String chunk;chunk.reserve(256);for(int k=0;k<256&&f.available();++k)chunk+=(char)f.read();web.sendContent(chunk);}
+      f.close();
+    }
+    web.sendContent("");
+  });
   web.on("/device", HTTP_POST, []() {
     if (!corePostAllowed()) return;
     if (web.arg("mode")!="prototype" && web.arg("mode")!="production") { web.send(400,"text/plain","Modo invalido"); return; }
@@ -512,6 +584,9 @@ String coreStatusFields() {
     ",\"airtime_used_ms\":" + String(coreAirtime.used) +
     ",\"duty_wait_ms\":\"" + u64(coreDutyWaitMs()) + "\"" +
     ",\"tx_packets\":" + String(coreTxCount) +
+    ",\"pair_fingerprint\":\""+corePairFingerprint()+"\""+
+    ",\"radio_recoveries\":"+String(coreRadioRecoveries)+",\"radio_recovery_errors\":"+String(coreRadioRecoveryFailures)+
+    ",\"log_enabled\":"+String(coreLogReady?"true":"false")+",\"log_bytes\":"+String(coreLogBytes())+
     ",\"tx_errors\":" + String(coreTxErrors) +
     ",\"duty_deferrals\":" + String(coreDutyDeferrals);
 }

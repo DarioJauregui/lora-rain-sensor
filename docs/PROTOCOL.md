@@ -1,5 +1,14 @@
 # Protocolo y persistencia
 
+## Recuperación y diagnósticos 1.2.3
+
+Una pérdida de ACK o estado durante al menos tres minutos, en modo Prototipo y sin una comunicación pendiente, permite reinicializar el controlador de radio. Se conserva la clave LoRa en NVS; el emisor inicia una nueva negociación de sesión. Las operaciones administrativas cifradas pendientes caducan o se cancelan explícitamente si cambia la sesión, para impedir bloqueos indefinidos.
+
+El identificador de emparejamiento muestra los primeros ocho dígitos hexadecimales de SHA-256 de la clave (no la propia clave). Permite comparar ambas instalaciones; no se usa como credencial ni se transmite como secreto de recuperación. Las claves no se sustituyen automáticamente.
+
+Los registros locales en LittleFS usan dos segmentos circulares de 16 KiB. Se recogen eventos relevantes, no cada muestra ni cada ACK, para evitar escrituras continuas. CSV: `timestamp_utc_ms,uptime_ms,role,event,value`. La hora UTC es opcional cuando el navegador no ha sincronizado el reloj. La descarga requiere autenticación web local.
+
+
 Versión 3. Radio: 868,3 MHz, BW125, SF7, CR4/5, 10 dBm. Emisor y receptor tienen identidades de rol distintas. Se crea una sesión mediante nonce del emisor y desafío aleatorio del receptor; se validan sesión, emisor, arranque y secuencia. Una actualización normal conserva las claves en NVS. Actualizar los dos nodos al mismo firmware.
 
 ## Tramas

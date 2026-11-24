@@ -32,6 +32,8 @@ bool configPending=false, resetPending=false;
 bool forceStateAfterAck=false, remoteRelayActive=false;
 uint64_t sensorStateSinceMs=0, remoteContactObservedSinceMs=0;
 String manualFeedback="Sin orden manual";
+uint64_t lastRadioProbeMs=0;
+bool previousLinkOk=false;
 uint32_t requestedConfig=64, requestedLossSeconds=180;
 uint64_t requestedPulseMs=1000;
 bool fsReady=false, recording=false;
@@ -70,6 +72,7 @@ bool validIso(const String &s) {
   return true;
 }
 void recordEvent(const char *event) {
+  coreLogEvent(event);
   if (!recording || !recordFile) return;
   uint64_t now=uptimeMs(); recordElapsed=now-recordStarted;
   String line=recordStartIso+","+u64(recordElapsed)+","+event+","+String(analogRain)+","+String(doLevel)+","+String(wetNow())+","+String(sensorInput.manual)+","+
@@ -161,7 +164,7 @@ String roleControlsHtml() {
     "<button id='stopRecord' data-command='/record/stop'>Detener</button>"
     "<a class='button' href='/record.csv' download>Descargar CSV</a></div><p id='recordState' aria-live='polite'>Sin grabación</p>"
     "<small>Tiempo desde el inicio. Registro automático en el emisor, aunque se desconecte el móvil. "
-    "Una grabación, hasta 1 MiB; se detiene al llenar la memoria. No borra datos al reiniciar.</small></section>"
+    "Un archivo CSV, hasta 1 MiB.</small></section>"
     "<section><h2>Prueba de lluvia</h2><div class='actions'>"
     "<button class='primary' data-command='/simulate' data-value='off' id='manualEnable'>Desactivar sensor / modo manual</button>"
     "<button data-command='/simulate' data-value='wet' id='manualWet'>Enviar MOJADO</button>"
@@ -169,15 +172,15 @@ String roleControlsHtml() {
     "<button data-command='/simulate' data-value='sensor' id='manualDisable'>Usar sensor físico</button></div>"
     "<p id='manualModeState' role='status'>Leyendo modo...</p>"
     "<small>Solo en prototipo. Primero desactiva el sensor: las órdenes MOJADO/SECO se enviarán por LoRa y se confirmarán mediante ACK. "
-    "El modo manual no depende de AO/DO y se desactiva al reiniciar o pasar a producción.</small></section>");
+    "El origen seleccionado se indica en la telemetría.</small></section>");
   s+=F("<dialog id='replaceRecord'><h2>Grabación anterior</h2><p>Descarga el archivo anterior antes de sustituirlo.</p>"
     "<div class='actions'><a class='button' href='/record.csv' download>Descargar anterior</a>"
     "<button id='confirmRecord'>Sustituir y grabar</button><button id='cancelRecord'>Cancelar</button></div></dialog>"
-    "<details><summary>Preparar memoria de grabación</summary><form action='/record/prepare' data-save>"
+    "<details id='memorySettings'><summary>Memoria de grabación</summary><form action='/record/prepare' data-save>"
     "<p class='hint'>Solo si aparece memoria no preparada. Formatear elimina cualquier grabación de esta partición. "
     "No cambia la configuración ni la clave.</p><label>Escribe BORRAR MEMORIA<input name='confirm' required></label><button>Preparar memoria</button></form></details>");
   s+=pulseControls();
-  s+=F("<details><summary>Sensor y envío</summary><form action='/settings' data-save><div class='grid'>"
+  s+=F("<details id='sensorSettings'><summary>Sensor y envío</summary><form action='/settings' data-save><div class='grid'>"
     "<label>Mojado si AO ≤<input name='on' type='number' min='0' max='3900' value='3500' required></label>"
     "<label>Seco si AO ≥<input name='off' type='number' min='1' max='4095' value='3900' required></label>"
     "<label>Lectura despierto (ms)<input name='sample' type='number' min='10' max='60000' value='50' required></label>"
@@ -340,6 +343,7 @@ void setup() {
   if(!initRadio(onRadioReceive)){coreScreen("ERROR RADIO","Reiniciar para probar","","","","");while(true)delay(1000);}
   // Never format an existing filesystem automatically. The portal requires explicit confirmation.
   fsReady=!resumed&&LittleFS.begin(false);if(!fsReady&&!resumed)recordError="Memoria no preparada";
+  if(!resumed)coreInitLog(fsReady);
   if(fsReady&&LittleFS.exists("/experiment.csv")){
     File f=LittleFS.open("/experiment.csv","r");bool header=true;while(f.available()){String row=f.readStringUntil('\n');if(header){header=false;continue;}int comma=row.indexOf(','),end=row.indexOf(',',comma+1);uint64_t elapsed;
       if(comma>0&&end>comma&&validIso(row.substring(0,comma))&&rain::decimal(row.substring(comma+1,end).c_str(),elapsed)){recordStartIso=row.substring(0,comma);recordElapsed=elapsed;++recordRows;}}f.close();
@@ -357,6 +361,20 @@ void loop() {
   previousPrototype=corePrototype;
   if(!coreMaintenance)updateSensor();serviceRadio();
   uint64_t now=uptimeMs();static uint64_t lastBattery=0;
+  const bool linkCurrent=linkOk();
+  if(linkCurrent!=previousLinkOk){previousLinkOk=linkCurrent;
+    if(lastAck)recordEvent(linkCurrent?"link_restored":"link_lost");
+  }
+  if(corePrototype&&corePaired&&!coreMaintenance&&!coreOtaInProgress&&
+     !awaitingAck&&!mgWaiting&&!coreDutyWaitMs()&&
+     ((!lastAck&&now>180000)||(lastAck&&now-lastAck>180000))&&
+     now-lastRadioProbeMs>180000){
+    lastRadioProbeMs=now;
+    if(coreRecoverRadio(onRadioReceive,"TX without ACK")){
+      sessionId=0;pending=false;awaitingAck=false;helloNonce=random64();if(!helloNonce)helloNonce=1;
+      nextSend=now;helloBackoff=15000;recordEvent("session_recovery");
+    }
+  }
   if(!coreMaintenance&&now-lastBattery>=30000){lastBattery=now;readBattery();}
   if(recording&&now-lastRecordSnapshot>=1000){lastRecordSnapshot=now;recordEvent("sample");}
   if(now-lastScreen>=1000){lastScreen=now;coreQuality=rain::quality(lastRssi,lastSnr,linkOk(),ackedStates,sentStates);

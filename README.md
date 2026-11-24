@@ -1,17 +1,32 @@
 # LoraRainSensor
 
-Firmware de emisor y receptor para **Heltec WiFi LoRa 32 V3**, con portal Wi-Fi, sensor de lluvia y relé configurable. Versión de desarrollo **1.2.2-prototype**, protocolo 3. La rama `main` contiene la versión integrada; las publicaciones de desarrollo se generan desde ella tras superar pruebas y compilación.
+Firmware de emisor y receptor para **Heltec WiFi LoRa 32 V3**, con portal Wi-Fi, sensor de lluvia y relé configurable. Versión de desarrollo **1.2.3-prototype**, protocolo 3. La rama `main` contiene la versión integrada; las publicaciones de desarrollo se generan desde ella tras superar pruebas y compilación.
+
+## 1.2.3-prototype — Panel, enlace y diagnóstico
+
+- En escritorio, espacio modular con monitor de enlace fijo a la derecha; en móvil, el monitor aparece antes de los controles.
+- Configuración en ventana independiente: dispositivo, memoria, sensor, red, emparejamiento, administración remota y firmware. Las funciones permanecen disponibles.
+- Diagnóstico del relé: estado lógico Rel ON/OFF, pin GPIO real y nivel eléctrico; prueba local de 2 segundos con confirmación y control automático deshabilitado.
+- Variantes RX GPIO5 (NO/NC) y GPIO2 (NO, módulo activo en HIGH o LOW). NO/NC indica el contacto; HIGH/LOW indica la polaridad eléctrica de la señal de mando.
+- Recuperación del controlador LoRa tras pérdida prolongada, sin reiniciar compulsivamente ni cambiar las claves. Operaciones remotas bloqueadas se cancelan con causa registrada.
+- Registro circular en LittleFS: dos segmentos de 16 KiB por placa, descarga autenticada en `/logs.csv`. Fecha UTC cuando el reloj ha sido sincronizado; contador monotónico de arranque siempre.
+- El portal sincroniza la hora desde el navegador y muestra un identificador no secreto de la clave local para comparar la configuración entre placas.
+
+**Nota eléctrica:** ver el nivel activo del módulo y conectar tierra común. Las GPIO del ESP32-S3 son de 3,3 V. Las señales HIGH/LOW no verifican la tensión sobre la bobina ni el estado físico del contacto.
+
+**OTA:** firmware de ambos nodos desde los portales Wi-Fi de cada placa. En GPIO2 usar exclusivamente el binario que coincida con la polaridad del módulo. El firmware NO configura automáticamente el contacto físico.
+
 
 ## Descargas e instalación
 
-[Versión 1.2.2-prototype](https://github.com/DarioJauregui/lora-rain-sensor/releases/tag/v1.2.2-prototype):
+[Versión 1.2.3-prototype](https://github.com/DarioJauregui/lora-rain-sensor/releases/tag/v1.2.3-prototype):
 
 | Archivo OTA | Dispositivo y cableado |
 |---|---|
-| [LoraRainSensor-Emisor.bin](https://github.com/DarioJauregui/lora-rain-sensor/releases/download/v1.2.2-prototype/LoraRainSensor-Emisor.bin) | Emisor, AO GPIO4; DO opcional GPIO2 |
-| [LoraRainSensor-Receptor-NO.bin](https://github.com/DarioJauregui/lora-rain-sensor/releases/download/v1.2.2-prototype/LoraRainSensor-Receptor-NO.bin) | Receptor, mando **GPIO5**, contacto COM-NO |
-| [LoraRainSensor-Receptor-NC.bin](https://github.com/DarioJauregui/lora-rain-sensor/releases/download/v1.2.2-prototype/LoraRainSensor-Receptor-NC.bin) | Receptor, mando **GPIO5**, contacto COM-NC |
-| [SHA256SUMS.txt](https://github.com/DarioJauregui/lora-rain-sensor/releases/download/v1.2.2-prototype/SHA256SUMS.txt) | Integridad de las tres imágenes |
+| [LoraRainSensor-Emisor.bin](https://github.com/DarioJauregui/lora-rain-sensor/releases/download/v1.2.3-prototype/LoraRainSensor-Emisor.bin) | Emisor, AO GPIO4; DO opcional GPIO2 |
+| [LoraRainSensor-Receptor-NO.bin](https://github.com/DarioJauregui/lora-rain-sensor/releases/download/v1.2.3-prototype/LoraRainSensor-Receptor-NO.bin) | Receptor, mando **GPIO5**, contacto COM-NO |
+| [LoraRainSensor-Receptor-NC.bin](https://github.com/DarioJauregui/lora-rain-sensor/releases/download/v1.2.3-prototype/LoraRainSensor-Receptor-NC.bin) | Receptor, mando **GPIO5**, contacto COM-NC |
+| [SHA256SUMS.txt](https://github.com/DarioJauregui/lora-rain-sensor/releases/download/v1.2.3-prototype/SHA256SUMS.txt) | Integridad de las tres imágenes |
 
 Actualizar **ambos nodos**. Son imágenes de aplicación para OTA o dirección USB `0x10000`, con las particiones de 8 MB por defecto de la placa. No son imágenes completas de flash. Elegir el archivo correspondiente al rol y al contacto cableado. La variante GPIO2 de 1.2.1 queda como antecedente; las imágenes actuales de receptor utilizan GPIO5.
 
