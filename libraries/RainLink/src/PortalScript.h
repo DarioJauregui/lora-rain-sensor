@@ -212,12 +212,13 @@ function paint(d){
   }
   telemetry(d);
 }
-let refreshVersion=0;
+let refreshVersion=0,paintedVersion=0;
 async function refresh(){
   const version=++refreshVersion;let data;
   try{const r=await fetch('/status',{cache:'no-store'});if(!r.ok)throw Error(`HTTP ${r.status}`);data=await r.json();}
   catch(e){if(version===refreshVersion)$('connection').textContent='Sin conexión Wi-Fi · los datos visibles son anteriores';return;}
-  if(version!==refreshVersion)return;
+  if(version<paintedVersion)return;
+  paintedVersion=version;
   try{paint(data);}catch(e){$('notice').textContent='Error al actualizar la interfaz: '+e.message;console.error(e);}
 }
 document.querySelectorAll('form[data-save]').forEach(form=>form.addEventListener('submit',async e=>{

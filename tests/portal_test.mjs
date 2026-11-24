@@ -120,4 +120,12 @@ releaseOld({ok:true,json:async()=>({...fixture,simulated:false})});
 await staleRefresh;
 assert.equal(element('manualWet').disabled,false);
 assert.match(element('manualModeState').textContent,/control manual/);
+// A slow status may still paint while a newer poll is in flight; no starvation.
+const pendingReplies=[];
+ctx.fetch=()=>new Promise(resolve=>pendingReplies.push(resolve));
+const firstSlow=vm.runInContext('refresh()',ctx),nextSlow=vm.runInContext('refresh()',ctx);
+pendingReplies[0]({ok:true,json:async()=>({...fixture,simulated:false})});await firstSlow;
+assert.equal(element('manualWet').disabled,true);
+pendingReplies[1]({ok:true,json:async()=>({...fixture,simulated:true})});await nextSlow;
+assert.equal(element('manualWet').disabled,false);
 console.log('Portal: stable TX/RX selector, visual telemetry, simulation and CSRF passed');

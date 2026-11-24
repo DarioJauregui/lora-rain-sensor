@@ -4,7 +4,7 @@ static const char PORTAL_HTML[] PROGMEM = R"HTML(<!doctype html>
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>LoraRainSensor</title><style>
 :root{--active-ink:#fff;--surface:#fff;--field:#fff;--page:#f3f6f8;--metric:#f5f8fa;--tx:#1767b5;--rx:#b65a0a}
-:root[data-theme=dark]{color-scheme:dark;--active-ink:#122433;--surface:#182630;--field:#1f333f;--page:#101b23;--metric:#20323f;--ink:#edf4f7;--muted:#adc0cd;--line:#3a4e5b;--accent:#298494}
+:root[data-theme=dark]{color-scheme:dark;--tx:#70b8ff;--rx:#ffb574;--active-ink:#122433;--surface:#182630;--field:#1f333f;--page:#101b23;--metric:#20323f;--ink:#edf4f7;--muted:#adc0cd;--line:#3a4e5b;--accent:#298494}
 body[data-view="TX"]{--page:#eaf2fa;--accent:var(--tx)}body[data-view="RX"]{--page:#fff1e5;--accent:var(--rx)}
 :root[data-theme=dark] body[data-view="TX"]{--page:#0c1d2d;--tx:#70b8ff}
 :root[data-theme=dark] body[data-view="RX"]{--page:#2b1b0f;--rx:#ffb574}
