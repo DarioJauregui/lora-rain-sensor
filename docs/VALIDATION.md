@@ -1,5 +1,17 @@
 # Validación
 
+## Criterios de aceptación 1.2.4
+
+1. Actualizar TX y RX a protocolo 4; conservar la misma clave HMAC y comprobar el identificador de emparejamiento.
+2. Con antenas conectadas y condiciones de cobertura adecuadas, probar varias horas en Prototipo: el emisor nunca duerme y la gestión no debe bloquear los estados. Revisar `ack_timeouts`, `retries`, `reply_deferred`, `reply_sent`, `rx_rearm_failures` y `duty_wait_ms`.
+3. Repetir pruebas con Wi-Fi y portal activos; simular pérdida/restitución del enlace mediante alejamiento o apantallamiento, sin transmitir sin antena. Confirmar recuperación automática y mantenimiento de eventos pendientes.
+4. Carga desconectada: configurar RX GPIO5, contacto NC, módulo IN activo LOW/HIGH, ejecutar prueba local de dos segundos y medir salida GPIO (0/3,3 V). Si IN necesita 5 V para desactivar, sustituir el módulo por otro de disparo 3,3 V o añadir una etapa de adaptación.
+5. Armar y probar SECO→MOJADO con pulso de 15 s. Comprobar reinicio, rearme y pérdida de enlace. `Rel ON/OFF` no representa realimentación física.
+6. Revisar modo Producción y avisos en rojo antes de desplegar; probar consumo y temporización de sueño por separado.
+
+**Pendiente de hardware:** la compilación y los tests no acreditan calidad del enlace en campo, polaridad real de IN o actuación mecánica del relé.
+
+
 ## Aceptación adicional 1.2.3
 
 - PC: monitor LoRa a la derecha, fijo durante desplazamiento; móvil: selector y monitor por encima de los controles.
@@ -14,7 +26,7 @@
 
 ## Automática
 
-El workflow `Firmware checks` es el punto de entrada completo: ejecuta pruebas y compila TX, RX-NO y RX-NC (GPIO5). Solo publica desde main cuando no existe la versión. Dependencias fijadas en el workflow.
+El workflow `Firmware checks` es el punto de entrada completo: ejecuta pruebas y compila TX y un único RX configurable (GPIO5/GPIO2, NO/NC e IN LOW/HIGH). Solo publica desde main cuando no existe la versión. Dependencias fijadas en el workflow.
 
 - `tests/logic_test.cpp`: entradas manuales, revisiones y ACK rechazado/antiguo, contactos NO/NC, duraciones de 64 bits, detector e histéresis, pulsos, rearme, pérdida de enlace y presupuesto móvil.
 - `tools/test_firmware.py` + `tests/firmware_test.cpp`: extrae las funciones reales `wetNow`, `queueState`, `updateSensor` , `applyManualSelection`, `getOperational` del sketch TX y `managementProcess` de administración y las ejecuta con radio/ADC deterministas. Comprueba sensor desconectado, repetición, cambio durante trama en vuelo, retorno a físico y eventos CSV. También comprueba las respuestas de modo aplicado, rechazo y duplicados pasando por el gestor real de ambos roles. No sustituye un controlador de radio real.

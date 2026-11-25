@@ -1,5 +1,14 @@
 # Protocolo y persistencia
 
+## 1.2.4 — Prioridad de comunicaciones y cableado
+
+**Protocolo 4:** ambas placas deben actualizarse. Se conservan HMAC, cifrado de administración y claves NVS, sin clave de recuperación pública ni vencimiento temporal del emparejamiento. La configuración de RX ahora incluye bits adicionales en `FRAME_CONFIG/ACK`: contacto NC (128), disparo IN activo LOW (256) y pin GPIO2 (512). El campo `polarity` (64) sigue indicando si una activación lógica energiza o desenergiza la bobina.
+
+El tráfico ordinario del sensor tiene prioridad sobre solicitudes remotas; el receptor deja pendiente un ACK/desafío si no puede emitirlo, y lo reintenta. ACK timeout en TX: 2,5 segundos; hasta cinco intentos de estado y HELLO con backoff hasta 30 segundos. Administración: 6 s/h como máximo dentro de 30 s/h totales por dispositivo. Se conservan eventos pendientes y se registran aplazamientos; no se garantizan transmisiones cuando la cuota se agota.
+
+El receptor guarda en NVS `rainrx2` el pin `relaypin` (5/2), `inputlow` y `contactnc`; cambiar cableado requiere control deshabilitado. La salida del ESP32-S3 entrega 0/3,3 V, no mide el contacto ni garantiza la activación de un módulo de 5 V.
+
+
 ## Recuperación y diagnósticos 1.2.3
 
 Una pérdida de ACK o estado durante al menos tres minutos, en modo Prototipo y sin una comunicación pendiente, permite reinicializar el controlador de radio. Se conserva la clave LoRa en NVS; el emisor inicia una nueva negociación de sesión. Las operaciones administrativas cifradas pendientes caducan o se cancelan explícitamente si cambia la sesión, para impedir bloqueos indefinidos.
@@ -9,7 +18,7 @@ El identificador de emparejamiento muestra los primeros ocho dígitos hexadecima
 Los registros locales en LittleFS usan dos segmentos circulares de 16 KiB. Se recogen eventos relevantes, no cada muestra ni cada ACK, para evitar escrituras continuas. CSV: `timestamp_utc_ms,uptime_ms,role,event,value`. La hora UTC es opcional cuando el navegador no ha sincronizado el reloj. La descarga requiere autenticación web local.
 
 
-Versión 3. Radio: 868,3 MHz, BW125, SF7, CR4/5, 10 dBm. Emisor y receptor tienen identidades de rol distintas. Se crea una sesión mediante nonce del emisor y desafío aleatorio del receptor; se validan sesión, emisor, arranque y secuencia. Una actualización normal conserva las claves en NVS. Actualizar los dos nodos al mismo firmware.
+Histórico: 1.2.0–1.2.3 usaban protocolo versión 3. Radio: 868,3 MHz, BW125, SF7, CR4/5, 10 dBm. Emisor y receptor tienen identidades de rol distintas. Se crea una sesión mediante nonce del emisor y desafío aleatorio del receptor; se validan sesión, emisor, arranque y secuencia. Una actualización normal conserva las claves en NVS. Actualizar los dos nodos al mismo firmware.
 
 ## Tramas
 

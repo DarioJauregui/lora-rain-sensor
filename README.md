@@ -1,6 +1,17 @@
 # LoraRainSensor
 
-Firmware de emisor y receptor para **Heltec WiFi LoRa 32 V3**, con portal Wi-Fi, sensor de lluvia y relé configurable. Versión de desarrollo **1.2.3-prototype**, protocolo 3. La rama `main` contiene la versión integrada; las publicaciones de desarrollo se generan desde ella tras superar pruebas y compilación.
+Firmware de emisor y receptor para **Heltec WiFi LoRa 32 V3**, con portal Wi-Fi, sensor de lluvia y relé configurable. Versión de desarrollo **1.2.4-prototype**, protocolo 4. La rama `main` contiene la versión integrada; las publicaciones de desarrollo se generan desde ella tras superar pruebas y compilación.
+
+## 1.2.4-prototype — Enlace prioritario y receptor universal
+
+- **Prototipo siempre despierto:** radio y Wi-Fi sin suspensión; Producción sigue siendo una opción explícita con advertencias de configuración pendientes.
+- **Recuperación automática:** ACK timeout de 2,5 s, cinco reintentos rápidos, búsqueda de sesión de 2 a 30 s, recuperación de radio y contadores de diagnóstico.
+- **Estados antes que administración:** el receptor conserva ACK/desafíos pendientes; el canal de administración utiliza hasta 6 s/h para reservar capacidad dentro del máximo conservador de 30 s/h por equipo.
+- **Un solo binario de receptor** con pin GPIO5/GPIO2, contacto COM-NO/COM-NC, disparo de la entrada IN en LOW/HIGH, y acción lógica Energizar/Desenergizar configurables y persistentes.
+- **Ajuste predeterminado:** GPIO5, entrada activa LOW para módulos habituales de disparo bajo. Verificar el módulo, con la carga desconectada, antes de armar.
+- **Protocolo 4:** actualizar ambas placas; la clave LoRa se conserva en NVS y no tiene caducidad.
+
+**Aviso eléctrico:** un GPIO del ESP32-S3 entrega **3,3 V**. Algunos relés alimentados a **5 V** y activos en LOW pueden continuar energizados con IN a 3,3 V y soltarse solo al desconectarlo. Elegir LOW en el firmware no garantiza resolverlo: hay que usar un módulo realmente compatible con 3,3 V o una etapa transistor/MOSFET de adaptación adecuada, con masa común. **No conectar 5 V a un GPIO.**
 
 ## 1.2.3-prototype — Panel, enlace y diagnóstico
 
@@ -19,18 +30,15 @@ Firmware de emisor y receptor para **Heltec WiFi LoRa 32 V3**, con portal Wi-Fi,
 
 ## Descargas e instalación
 
-[Versión 1.2.3-prototype](https://github.com/DarioJauregui/lora-rain-sensor/releases/tag/v1.2.3-prototype):
+[Versión 1.2.4-prototype](https://github.com/DarioJauregui/lora-rain-sensor/releases/tag/v1.2.4-prototype):
 
-| Archivo OTA | Dispositivo y cableado |
+| Archivo OTA | Uso |
 |---|---|
-| [LoraRainSensor-Emisor.bin](https://github.com/DarioJauregui/lora-rain-sensor/releases/download/v1.2.3-prototype/LoraRainSensor-Emisor.bin) | Emisor, AO GPIO4; DO opcional GPIO2 |
-| [LoraRainSensor-Receptor-NO.bin](https://github.com/DarioJauregui/lora-rain-sensor/releases/download/v1.2.3-prototype/LoraRainSensor-Receptor-NO.bin) | Receptor, mando **GPIO5**, contacto COM-NO |
-| [LoraRainSensor-Receptor-NC.bin](https://github.com/DarioJauregui/lora-rain-sensor/releases/download/v1.2.3-prototype/LoraRainSensor-Receptor-NC.bin) | Receptor, mando **GPIO5**, contacto COM-NC |
-| [LoraRainSensor-Receptor-GPIO2-HIGH-NO.bin](https://github.com/DarioJauregui/lora-rain-sensor/releases/download/v1.2.3-prototype/LoraRainSensor-Receptor-GPIO2-HIGH-NO.bin) | Receptor GPIO2, contacto NO, entrada de relé activa en HIGH |
-| [LoraRainSensor-Receptor-GPIO2-LOW-NO.bin](https://github.com/DarioJauregui/lora-rain-sensor/releases/download/v1.2.3-prototype/LoraRainSensor-Receptor-GPIO2-LOW-NO.bin) | Receptor GPIO2, contacto NO, entrada de relé activa en LOW |
-| [SHA256SUMS.txt](https://github.com/DarioJauregui/lora-rain-sensor/releases/download/v1.2.3-prototype/SHA256SUMS.txt) | Integridad de las cinco imágenes |
+| [LoraRainSensor-Emisor.bin](https://github.com/DarioJauregui/lora-rain-sensor/releases/download/v1.2.4-prototype/LoraRainSensor-Emisor.bin) | Emisor (AO GPIO4 y DO opcional GPIO2) |
+| [LoraRainSensor-Receptor.bin](https://github.com/DarioJauregui/lora-rain-sensor/releases/download/v1.2.4-prototype/LoraRainSensor-Receptor.bin) | Receptor universal, pin y cableado configurables |
+| [SHA256SUMS.txt](https://github.com/DarioJauregui/lora-rain-sensor/releases/download/v1.2.4-prototype/SHA256SUMS.txt) | Comprobación de integridad |
 
-Actualizar **ambos nodos**. Son imágenes de aplicación para OTA o dirección USB `0x10000`, con las particiones de 8 MB por defecto de la placa. No son imágenes completas de flash. Elegir el archivo correspondiente al rol y al contacto cableado. La variante GPIO2 de 1.2.1 queda como antecedente; las imágenes actuales de receptor utilizan GPIO5.
+Actualizar ambos nodos: el protocolo 4 exige que TX y RX compartan versión. Los binarios son imágenes OTA de aplicación y conservan NVS y LittleFS.
 
 Para OTA, conectarse directamente al Wi-Fi de cada placa, entrar en su vista y abrir **Actualizar firmware**. Elegir el `.bin` de ese dispositivo. La selección de dispositivo en el portal no cambia de Wi-Fi ni permite OTA remota por LoRa. Durante mantenimiento, RX desenergiza la salida; una carga fallida requiere reiniciar para recuperar servicio.
 
@@ -72,7 +80,7 @@ La calibración muestra AO (ADC 0–4095), DO y estado. Mojado si AO ≤ umbral 
 
 TX muestra MOJADO/SECO y **AO alineado a la derecha**, origen FISICO/MANUAL, ACK pendiente/OK y tiempo desde el último ACK. Abajo a la izquierda muestra `Rel ON/OFF` y tiempo desde el último cambio observado en una respuesta. Ese tiempo es una observación remota, no una medida exacta del momento eléctrico de RX. Sin datos: `Rel --`.
 
-RX muestra contacto esperado ABIERTO/CERRADO, lluvia y origen recibido, enlace, `Rel ON/OFF` y tiempo desde el cambio de activación lógica. Abajo aparece `Temp` y cuenta atrás, o `Temp --` si no hay temporizador en marcha (incluido rearme pendiente). Para tiempos en estado: segundos hasta 3600 s, después minutos hasta 1440 min, después horas. La cuenta atrás usa unidades compactas. El porcentaje conserva una zona propia sin solaparse con esos textos.
+RX muestra Rel ON/OFF y GPIO, con el contacto esperado ABIERTO/CERRADO calculado en la telemetría, lluvia y origen recibido, enlace, `Rel ON/OFF` y tiempo desde el cambio de activación lógica. Abajo aparece `Temp` y cuenta atrás, o `Temp --` si no hay temporizador en marcha (incluido rearme pendiente). Para tiempos en estado: segundos hasta 3600 s, después minutos hasta 1440 min, después horas. La cuenta atrás usa unidades compactas. El porcentaje conserva una zona propia sin solaparse con esos textos.
 
 `Rel ON` significa **activación lógica del relé**, según la polaridad elegida, y no necesariamente bobina energizada. ABIERTO/CERRADO se calcula a partir de la orden y contacto NO/NC: no existe realimentación física.
 
@@ -80,7 +88,7 @@ Calidad estimada: 35 % RSSI normalizado entre −125 y −65 dBm, 25 % SNR entre
 
 ## Relé y temporización
 
-GPIO5 manda una etapa de control; no alimentar una bobina directamente desde el GPIO. `RAIN_CONTACT_NC=0` selecciona NO; `=1` selecciona NC al compilar. No se cambia por web o LoRa. `RAIN_RELAY_ACTIVE_HIGH=1` es el nivel de mando del GPIO por defecto. La acción lógica **activar relé** se configura de forma independiente: energizar o desenergizar la bobina.
+GPIO5 es el pin predeterminado, configurable a GPIO2. Se eligen por separado contacto NO/NC, nivel de disparo de la entrada IN (LOW/HIGH) y acción lógica al activar (energizar/desenergizar bobina). **La lectura GPIO solo indica una orden eléctrica de 0/3,3 V, sin confirmar el estado de la bobina.**
 
 - **Un pulso por episodio:** primera transición mojada o evento de lluvia pendiente; permanecer mojado no repite el pulso.
 - **Prolongar mientras esté mojado:** mantiene activación con la última lectura mojada vigente; tras seco, termina el tiempo pendiente desde la última renovación.

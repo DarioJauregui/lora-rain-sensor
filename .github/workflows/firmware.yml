@@ -40,9 +40,6 @@ jobs:
         run: |
           arduino-cli compile --fqbn esp32:esp32:heltec_wifi_lora_32_V3 --libraries libraries --output-dir artifacts/TX Emisor
           arduino-cli compile --fqbn esp32:esp32:heltec_wifi_lora_32_V3 --libraries libraries --output-dir artifacts/RX Receptor
-          arduino-cli compile --fqbn esp32:esp32:heltec_wifi_lora_32_V3 --libraries libraries --build-property compiler.cpp.extra_flags=-DRAIN_CONTACT_NC=1 --output-dir artifacts/RX-NC Receptor
-          arduino-cli compile --fqbn esp32:esp32:heltec_wifi_lora_32_V3 --libraries libraries --build-property compiler.cpp.extra_flags=-DRAIN_RELAY_GPIO=2 --output-dir artifacts/RX-GPIO2-HIGH Receptor
-          arduino-cli compile --fqbn esp32:esp32:heltec_wifi_lora_32_V3 --libraries libraries --build-property 'compiler.cpp.extra_flags=-DRAIN_RELAY_GPIO=2 -DRAIN_RELAY_ACTIVE_HIGH=0' --output-dir artifacts/RX-GPIO2-LOW Receptor
       - name: Publish public development binaries
         if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         env:
@@ -50,10 +47,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           cp artifacts/TX/Emisor.ino.bin artifacts/LoraRainSensor-Emisor.bin
-          cp artifacts/RX/Receptor.ino.bin artifacts/LoraRainSensor-Receptor-NO.bin
-          cp artifacts/RX-NC/Receptor.ino.bin artifacts/LoraRainSensor-Receptor-NC.bin
-          cp artifacts/RX-GPIO2-HIGH/Receptor.ino.bin artifacts/LoraRainSensor-Receptor-GPIO2-HIGH-NO.bin
-          cp artifacts/RX-GPIO2-LOW/Receptor.ino.bin artifacts/LoraRainSensor-Receptor-GPIO2-LOW-NO.bin
+          cp artifacts/RX/Receptor.ino.bin artifacts/LoraRainSensor-Receptor.bin
           sha256sum artifacts/LoraRainSensor-*.bin > artifacts/SHA256SUMS.txt
           tag=v$(sed -n 's/^static const char \*FW_VERSION = "\(.*\)";/\1/p' libraries/RainLink/src/RainCore.h)
           [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-prototype$ ]]

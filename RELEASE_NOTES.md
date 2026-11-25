@@ -1,14 +1,13 @@
-# LoraRainSensor 1.2.3-prototype
+# LoraRainSensor 1.2.4-prototype
 
-Versión de desarrollo para Heltec WiFi LoRa 32 V3. Protocolo 3, actualizar ambos nodos.
+Para Heltec WiFi LoRa 32 V3 · **Protocolo 4**. Instalar ambos `.bin` antes de comprobar el enlace.
 
-- Interfaz responsiva: estado del enlace fijo a la derecha en escritorio; controles organizados en móvil y ajustes agrupados en una ventana.
-- Estado lógico de relé Rel ON/OFF, prueba local de 2 segundos desarmada y diagnóstico del nivel GPIO.
-- RX GPIO5 NO/NC (activo HIGH) y RX GPIO2 NO activo HIGH o activo LOW. Elegir según el cableado y el disparo real del módulo.
-- Recuperación limitada del controlador LoRa y expiración de órdenes de administración bloqueadas; clave privada persistente sin fallback público.
-- Registro circular de eventos por nodo (32 KiB máximos) y descarga CSV autenticada `/logs.csv`. UTC disponible tras sincronización desde la web; tiempo monotónico siempre.
-- Identificador de emparejamiento resumido, sin publicar la clave ni incluirla en diagnósticos.
+**Enlace:** perfil Prototipo despierto sin suspensión; estados del sensor prioritarios sobre administración, reintentos más rápidos, búsqueda HELLO de 2–30 s y recepción de ACK/desafíos diferidos en RX. Presupuesto conservador de 30 s/h por dispositivo, con 6 s/h como máximo de tráfico administrativo; se respeta el tiempo de emisión permitido.
 
-**Validación de seguridad:** la indicación Rel ON/OFF describe el estado lógico, no una medida del contacto. Desconectar cargas para probar GPIO y polaridad. Compilación y pruebas automáticas no sustituyen validación eléctrica ni de alcance.
+**Relé:** un único `LoraRainSensor-Receptor.bin` con GPIO5/GPIO2, contacto NO/NC, disparo de entrada IN activo en LOW/HIGH y actuación Energizar/Desenergizar configurables en el portal. Por defecto GPIO5, IN activo LOW en una instalación nueva. No se cambian ajustes de cableado mientras el control está habilitado.
 
-Los binarios son aplicaciones OTA con particiones Heltec V3 de 8 MB y conservan NVS/LittleFS. No flashear como imagen de flash completa.
+**Telemetría:** ACK diferidos, fallos al rearmar radio, calidad/antigüedad del enlace, polaridad IN y tensión lógica GPIO. Los registros locales y opciones anteriores se conservan.
+
+**Limitación física:** el GPIO del ESP32-S3 es de 3,3 V. Un módulo de relé alimentado a 5 V puede requerir una etapa de adaptación de nivel, especialmente si su entrada activa LOW permanece activada con 3,3 V. No conectar 5 V al GPIO. Probar siempre sin carga.
+
+Los binarios son aplicaciones OTA, mantienen NVS/LittleFS y no incluyen claves privadas. Actualizar TX y RX al protocolo 4; las claves locales se conservan. Las pruebas automáticas no sustituyen las pruebas de alcance ni de relé físico.

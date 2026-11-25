@@ -5,6 +5,8 @@
 int main() {
   assert(!rain::contactClosed(false,false));assert(rain::contactClosed(false,true));
   assert(rain::contactClosed(true,false));assert(!rain::contactClosed(true,true));
+  assert(rain::relayOutputHigh(false,true)&&!rain::relayOutputHigh(true,true)); // LOW-trigger
+  assert(!rain::relayOutputHigh(false,false)&&rain::relayOutputHigh(true,false)); // HIGH-trigger
   assert(rain::quality(-80,10,false,10,10)==-1);
   assert(rain::quality(-80,10,true,10,10)>rain::quality(-120,-10,true,2,10));
   rain::SensorInput input;
@@ -115,6 +117,13 @@ int main() {
   assert(afterSleep.spend(3600000, 500));
   assert(afterSleep.used == 30000);
   afterSleep.expire(7200000); assert(afterSleep.used == 0);
+  rain::Airtime reserved;
+  assert(reserved.spend(0,10000));
+  assert(reserved.spend(1000,1000,12000));
+  assert(reserved.spend(2000,1000,12000));
+  assert(!reserved.spend(3000,1000,12000)); // leave capacity for ACK and state
+  assert(reserved.spend(3000,1000)); // priority frame uses full 30 s budget
+  assert(reserved.wait(3000,1000,12000)==3597000); // no background leak while over cap
   rain::Airtime full;
   for (int i=0; i<256; ++i) assert(full.spend(i, 1));
   assert(!full.spend(300, 1)); // full ring must not overwrite recent entries

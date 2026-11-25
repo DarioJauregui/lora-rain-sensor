@@ -25,7 +25,7 @@ main[data-view="TX"]{--accent:var(--tx)}main[data-view="RX"]{--accent:var(--rx)}
 
 :root{color-scheme:light;--ink:#192b36;--muted:#526574;--line:#d7e0e5;--accent:#176877}
 *{box-sizing:border-box}body{margin:0;background:var(--page);color:var(--ink);font:15px system-ui,sans-serif}
-main{max-width:1360px;margin:auto;padding:20px}
+main{max-width:1360px;margin:auto;padding:20px}.production-alert{color:#b12f2f;font-weight:600;font-size:13px;padding:8px 0}:root[data-theme=dark] .production-alert{color:#ff9797}
 .workspace{display:flex;flex-direction:column}.workspace-main{order:2;min-width:0}.workspace-side{order:1;min-width:0}
 .workspace-side #linkPanel .grid{grid-template-columns:repeat(2,minmax(0,1fr))}
 .toolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:14px 0}
@@ -68,7 +68,8 @@ table{width:100%;border-collapse:collapse;font-size:13px}td{padding:7px;border-b
 <div class="grid"><label>Modo<select name="mode"><option value="prototype">Prototipo</option><option value="production">Producción</option></select></label>
 <label>Pantalla<select name="display"><option value="1">Encendida</option><option value="0">Apagada</option></select></label>
 <label>Wi-Fi<select name="wifi"><option value="1">Disponible</option><option value="0">Apagar al guardar</option></select></label></div>
-<div class="actions"><button>Aplicar</button><small>Prototipo: sin suspensión, pantalla y Wi-Fi continuos.
+<p id="productionModeWarning" class="production-alert" hidden>Producción: validar radio, relé, alimentación, sensores, política de pérdida y contactos antes de habilitar el servicio.</p>
+<div class="actions"><button>Aplicar</button><small>Prototipo: radio y Wi-Fi permanentes. Producción: ahorro de energía configurable.
 <details class="help"><summary aria-label="Ayuda del modo">?</summary><p>En producción el emisor puede dormir entre lecturas y el portal cierra a los tres minutos del arranque. Para recuperar Wi-Fi tras apagarlo, reinicia la placa. Reiniciar el receptor interrumpe su salida.</p></details></small></div></form></section>
 
 <div id="localSpace">__CONTROLS__

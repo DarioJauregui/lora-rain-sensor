@@ -73,7 +73,16 @@ const fields={
   rx_coil:['Orden de bobina','Orden eléctrica solicitada, no lectura del contacto real'],
   contact_nc:['Contacto NC','Tipo de contacto físico configurado al compilar el receptor'],
   remaining_ms:['Tiempo restante (ms)','Último temporizador comunicado; en vista remota puede estar desactualizado'],
-  rx_restored:['Rearme requerido','Se requiere rearme manual tras restaurar una activación'],
+  rx_restored:['Rearme requerido','Rearmar tras una activación restaurada antes de permitir nuevos pulsos'],
+  relay_pin:['Pin del relé','GPIO físico que gobierna la entrada IN: GPIO5 o GPIO2'],
+  relay_input_low:['Disparo activo en LOW','La entrada IN se activa con LOW (0 V) y debe quedar inactiva con HIGH (3,3 V); algunos módulos de 5 V requieren adaptación de nivel'],
+  reply_deferred:['ACK diferidos','Respuestas pendientes al alcanzar el presupuesto de radio; el enlace puede continuar aunque aumente el contador'],
+  reply_sent:['Respuestas transmitidas','Total de respuestas ACK o desafío transmitidas por el receptor'],
+  reply_errors:['Errores de respuesta','Fallos al transmitir respuestas LoRa'],
+  rx_rearm_failures:['Fallos de recepción','Error al rearmar la recepción del transceptor; requiere recuperación'],
+  rx_recovery_needed:['Recuperación pendiente','El transceptor no pudo rearmar recepción y necesita reinicialización'],
+  peer_heartbeat_ms:['Intervalo remoto','Periodo entre estados configurado en el emisor'],
+  comms_lost:['Sin estados recientes','Timeout de protección del relé independiente del indicador de enlace'],
   remote_last_reply_age_ms:['Antigüedad de consulta remota','Tiempo desde la última respuesta de administración del dispositivo remoto'],
   management_state:['Operación LoRa','Estado de las órdenes de administración entre dispositivos'],
   airtime_used_ms:['Tiempo de radio utilizado','Emisión acumulada dentro de la ventana móvil controlada'],
@@ -178,11 +187,15 @@ function paint(d){
   if($('logsState'))$('logsState').textContent=d.log_enabled?'Disponible · '+(d.log_bytes||0)+' bytes':'Almacenamiento no preparado';
   if($('logsPrepare'))$('logsPrepare').disabled=!!d.log_enabled;
   if($('pairState'))$('pairState').textContent=d.paired?'Emparejamiento configurado · '+(d.pair_fingerprint||''): 'Emparejamiento pendiente';
-  if($('relayLocalState'))$('relayLocalState').textContent=d.rx_active?'Rel ON':'Rel OFF';
+  if($('relayLocalState'))$('relayLocalState').textContent=d.relay_test?'PRUEBA ACTIVA':d.rx_active?'Rel ON':'Rel OFF';
   if($('relayLocalAge'))$('relayLocalAge').textContent='Desde hace '+timeSince(d.relay_state_age_ms);
   if($('relayElectricalState'))$('relayElectricalState').textContent=d.relay_test?'PRUEBA':d.relay_output_high?'HIGH':'LOW';
-  if($('relayPinInfo'))$('relayPinInfo').textContent='GPIO '+(d.relay_pin??'—')+' · activación '+(d.relay_active_high?'HIGH':'LOW');
-  if($('relayTestButton'))$('relayTestButton').disabled=d.rx_armed||d.maintenance||d.relay_test;
+  if($('relayPinInfo'))$('relayPinInfo').textContent='GPIO '+(d.relay_pin??'—')+' · IN activo en '+(d.relay_input_low?'LOW':'HIGH')+' · señal '+(d.relay_output_high?'3,3 V':'0 V');
+  if($('relayTestButton'))$('relayTestButton').disabled=d.maintenance||d.relay_test;
+  if($('relayTestHelp'))$('relayTestHelp').textContent=d.rx_armed?'Deshabilita el control automático para efectuar la prueba local.':
+    d.relay_test?'Prueba activa durante 2 segundos.':'Conecta la placa a 5 V y verifica el nivel IN con un multímetro; la lectura GPIO no confirma la bobina.';
+  if($('prodWarning'))$('prodWarning').hidden=!!d.prototype;
+  if($('productionModeWarning'))$('productionModeWarning').hidden=!!d.prototype;
   if($('sensorLive'))$('sensorLive').textContent='AO '+d.ao+' / 4095 · DO '+(d.do??'—')+' · '+(d.wet?'Mojado':'Seco')+(d.simulated?' (simulación)':'');
   if($('manualModeState'))$('manualModeState').textContent='Sensor '+(d.simulated?'DESACTIVADO · control manual':'ACTIVADO · lectura física')+' · '+(d.manual_feedback||'');
   for(const id of ['manualWet','manualDry'])if($(id))$(id).disabled=!d.prototype||!d.simulated;
@@ -217,7 +230,11 @@ function paint(d){
     group.dataset.loaded='1';
   }
   for(const form of document.querySelectorAll('form[data-pulse]')){
-    if(d.rx_known&&!form.dataset.loaded){fillDuration(form,d.pulse_ms);form.elements.policy.value=d.policy;form.elements.loss.value=d.loss;form.elements.armed.value=d.rx_armed?'1':'0';form.elements.polarity.value=d.polarity;if(form.elements.loss_seconds)form.elements.loss_seconds.value=d.loss_seconds;form.dataset.loaded='1';}
+    if(d.rx_known&&!form.dataset.loaded){fillDuration(form,d.pulse_ms);form.elements.policy.value=d.policy;form.elements.loss.value=d.loss;form.elements.armed.value=d.rx_armed?'1':'0';form.elements.polarity.value=d.polarity;
+      if(form.elements.pin)form.elements.pin.value=String(d.relay_pin??5);
+      if(form.elements.contact)form.elements.contact.value=d.contact_nc?'1':'0';
+      if(form.elements.input_low)form.elements.input_low.value=d.relay_input_low?'1':'0';
+      if(form.elements.loss_seconds)form.elements.loss_seconds.value=d.loss_seconds;form.dataset.loaded='1';}
   }
   telemetry(d);
 }
@@ -289,7 +306,8 @@ function setupSettings(){
 }
 setupSettings();
 if($('relayTestButton'))$('relayTestButton').addEventListener('click',async()=>{
-  if(!lastStatus||lastStatus.rx_armed||lastStatus.maintenance)return;
+  if(!lastStatus||lastStatus.maintenance)return;
+  if(lastStatus.rx_armed){$('notice').textContent='Deshabilita el control automático del relé antes de probar la salida.';return;}
   const answer=prompt('Con la carga desconectada, escribe PROBAR para accionar la salida durante 2 segundos.');
   if(answer!=='PROBAR')return;
   try{$('notice').textContent=await post('/relay-test',{confirm:answer});await refresh();}

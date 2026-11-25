@@ -22,9 +22,9 @@
 #include "Portal.h"
 
 // Version shared by the two devices; Arduino-ESP32 core 3.3.2, RadioLib 7.8.1.
-static const char *FW_VERSION = "1.2.3-prototype";
+static const char *FW_VERSION = "1.2.4-prototype";
 static const uint32_t PROTOCOL_MAGIC = 0x52414E39UL;
-static const uint8_t PROTOCOL_VERSION = 3;
+static const uint8_t PROTOCOL_VERSION = 4;
 static const uint32_t TX_ID = 0x54583031UL;
 static const uint32_t RX_ID = 0x52583031UL;
 static const uint8_t FRAME_HELLO = 1;
@@ -111,7 +111,8 @@ uint64_t uptimeMs();
 uint64_t rtcTimeMs();
 String u64(uint64_t n);
 uint32_t coreFrameAirtimeMs = 650;
-uint32_t coreRadioRecoveries=0, coreRadioRecoveryFailures=0;
+uint32_t coreRadioRecoveries=0, coreRadioRecoveryFailures=0,coreRxRearmFailures=0;
+bool coreRxRecoveryNeeded=false;
 uint64_t coreLastRadioRecoveryMs=0;
 bool coreLogReady=false;
 bool coreUtcAvailable=false;
@@ -266,7 +267,9 @@ int16_t transmitFrame(RainFrame &f, void (*onRx)(void)) {
   if (!corePaired) return -32001;
   size_t wireSize=(f.type==7||f.type==8)?sizeof(f):88;
   uint32_t cost=(radio.getTimeOnAir(wireSize)+999)/1000+5;
-  if (!coreAirtime.spend(rtcTimeMs(), cost)) {
+  // Restringir las operaciones de administración: el tráfico de estado y ACK es prioritario.
+  const uint32_t budget=(f.type==7||f.type==8)?6000u:30000u;
+  if (!coreAirtime.spend(rtcTimeMs(), cost, budget)) {
     ++coreDutyDeferrals; return -32000;
   }
   ++coreTxCount;
@@ -276,9 +279,9 @@ int16_t transmitFrame(RainFrame &f, void (*onRx)(void)) {
   int16_t rc = radio.transmit(wire,wireSize);
   radio.setPacketReceivedAction(onRx);
   int16_t armRc = radio.startReceive();
-  if (armRc != RADIOLIB_ERR_NONE) Serial.printf("RX REARM ERROR %d\n", armRc);
+  if (armRc != RADIOLIB_ERR_NONE){++coreRxRearmFailures;coreRxRecoveryNeeded=true;Serial.printf("RX REARM ERROR %d\n", armRc);}
   if (rc != RADIOLIB_ERR_NONE) ++coreTxErrors;
-  return rc;
+  return rc == RADIOLIB_ERR_NONE ? armRc : rc;
 }
 
 bool coreRecoverRadio(void (*onRx)(void),const char *reason){
@@ -288,6 +291,7 @@ bool coreRecoverRadio(void (*onRx)(void),const char *reason){
   ++coreRadioRecoveries;
   const bool ok=initRadio(onRx);
   if(!ok)++coreRadioRecoveryFailures;
+  else coreRxRecoveryNeeded=false;
   coreLogEvent(ok?"radio_recovery_ok":"radio_recovery_error",ok?0:-1);
   Serial.printf("Radio recovery: %s, result=%d\n",reason?reason:"unknown",ok);
   return ok;
@@ -598,6 +602,7 @@ String coreStatusFields() {
     ",\"tx_packets\":" + String(coreTxCount) +
     ",\"pair_fingerprint\":\""+corePairFingerprint()+"\""+
     ",\"radio_recoveries\":"+String(coreRadioRecoveries)+",\"radio_recovery_errors\":"+String(coreRadioRecoveryFailures)+
+    ",\"rx_rearm_failures\":"+String(coreRxRearmFailures)+",\"rx_recovery_needed\":"+String(coreRxRecoveryNeeded?"true":"false")+
     ",\"log_enabled\":"+String(coreLogReady?"true":"false")+",\"log_bytes\":"+String(coreLogBytes())+
     ",\"tx_errors\":" + String(coreTxErrors) +
     ",\"duty_deferrals\":" + String(coreDutyDeferrals);

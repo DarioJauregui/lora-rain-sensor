@@ -15,11 +15,11 @@ function makeNode(){
   };
 }
 const element=id=>{if(!elements.has(id))elements.set(id,makeNode());return elements.get(id);};
-const controls={policy:{},loss:{},armed:{},polarity:{},hours:{},minutes:{},seconds:{},milliseconds:{}};
+const controls={policy:{},loss:{},armed:{},polarity:{},pin:{},contact:{},input_low:{},hours:{},minutes:{},seconds:{},milliseconds:{}};
 controls.namedItem=key=>controls[key];
 const pulseForm={elements:controls,dataset:{}};
 const fixture={role:'TX',prototype:true,display_enabled:true,link_ok:true,ack_age_ms:100,wet:true,simulated:true,
-  rx_known:true,rx_wet:true,rx_armed:true,rx_coil:false,contact_nc:true,quality_pct:72,
+  rx_known:true,rx_wet:true,rx_armed:true,rx_coil:false,contact_nc:true,relay_pin:5,relay_input_low:true,quality_pct:72,
   state_age_ms:'12000',rx_state_observed_ms:'2000',manual_feedback:'ACK confirmado: MOJADO',
   remaining_ms:'18446744073709551615',pulse_ms:'18446744073709551615',
   rssi_dbm:-110,snr_db:-4,rx_rssi_dbm:-112,rx_snr_db:-5,duty_wait_ms:'0',sf:9,
@@ -34,6 +34,11 @@ const ctx=vm.createContext({console,URLSearchParams,Date,BigInt,setInterval(){},
 vm.runInContext(js,ctx);
 await new Promise(resolve=>setImmediate(resolve));
 assert.equal(controls.hours.value,'5124095576030');
+assert.equal(controls.pin.value,'5');
+assert.equal(controls.contact.value,'1');
+assert.equal(controls.input_low.value,'1');
+assert.equal(element('relayPinInfo').textContent,'GPIO 5 · IN activo en LOW · señal 0 V');
+assert.equal(element('prodWarning').hidden,true);
 assert.equal(vm.runInContext("durationText('3600001')",ctx),'1 h 0 min 0 s 1 ms');
 assert.equal(main.dataset.view,'TX');
 assert.equal(element('accessTx').textContent,'● Wi-Fi directo');
@@ -43,6 +48,9 @@ assert.equal(element('link').textContent,'Confirmado');
 assert.match(element('viewStateAge').textContent,/12 s/);
 assert.match(element('manualModeState').textContent,/control manual/);
 assert.equal(element('manualWet').disabled,false);
+vm.runInContext("paint({...lastStatus,prototype:false})",ctx);
+assert.equal(element('prodWarning').hidden,false);
+vm.runInContext("paint({...lastStatus,prototype:true})",ctx);
 assert.ok(element('data').children.length>2);
 element('selectRx').handlers.click();
 assert.equal(main.dataset.view,'RX');

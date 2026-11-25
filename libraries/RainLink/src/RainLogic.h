@@ -30,6 +30,8 @@ inline const char *stateAgeUnit(uint64_t ms) {
   return ms > 86400000ULL ? "h" : ms > 3600000ULL ? "m" : "s";
 }
 inline bool contactClosed(bool nc,bool coil){return nc?!coil:coil;}
+// Módulo activo en LOW: el nivel de reposo es HIGH, y viceversa.
+inline bool relayOutputHigh(bool coilEnergized,bool inputActiveLow){return coilEnergized!=inputActiveLow;}
 inline int quality(float rssi,float snr,bool fresh,uint32_t confirmed,uint32_t sent){
   if(!fresh)return -1;
   float r=(rssi+125)*100/60, n=(snr+12)*100/22;
@@ -125,10 +127,10 @@ struct Airtime {
       used -= entries[head].ms; head = (head + 1) % 256; --count;
     }
   }
-  uint64_t wait(uint64_t now, uint32_t cost) {
+  uint64_t wait(uint64_t now, uint32_t cost, uint32_t limit=30000) {
     expire(now);
-    if (cost > 30000) return 3600000;
-    uint32_t available = 30000 - used;
+    if (cost > limit) return 3600000;
+    int64_t available = (int64_t)limit - (int64_t)used;
     if (count < 256 && available >= cost) return 0;
     for (uint16_t i = 0; i < count; ++i) {
       const auto &e = entries[(head + i) % 256]; available += e.ms;
@@ -136,8 +138,8 @@ struct Airtime {
     }
     return 3600000;
   }
-  bool spend(uint64_t now, uint32_t cost) {
-    if (wait(now, cost)) return false;
+  bool spend(uint64_t now, uint32_t cost, uint32_t limit=30000) {
+    if (wait(now, cost, limit)) return false;
     entries[(head + count) % 256] = {now, cost}; ++count; used += cost; return true;
   }
 };

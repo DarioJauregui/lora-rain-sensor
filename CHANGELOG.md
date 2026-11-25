@@ -1,5 +1,13 @@
 # Historial
 
+## 1.2.4-prototype
+
+- Enlace LoRa con estados prioritarios, ACK/desafíos RX diferidos y reintentos/sesiones recuperados con mayor rapidez.
+- Administración LoRa limitada a 6 s/h de un presupuesto total de 30 s/h; comunicaciones cifradas y autenticación conservadas.
+- Receptor único con GPIO, disparo LOW/HIGH y contacto NO/NC configurables; perfil Prototipo siempre despierto.
+- Pruebas de GPIO y límite reservado de emisión; protocolo 4.
+
+
 ## 1.2.3-prototype
 
 - Vista modular de escritorio, estado del enlace lateral fijo, configuración desplazada a diálogo sin retirar funciones móviles.

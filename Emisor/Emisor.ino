@@ -6,7 +6,7 @@
 #include <esp_sleep.h>
 
 constexpr uint8_t PIN_RAIN_AO=4, PIN_RAIN_DO=2;
-constexpr uint32_t ACK_TIMEOUT_MS=3000;
+constexpr uint32_t ACK_TIMEOUT_MS=2500;
 RTC_DATA_ATTR uint32_t savedBoot=0, savedSeq=0, savedSignature=0;
 RTC_DATA_ATTR uint64_t savedSession=0;
 RTC_DATA_ATTR bool savedWet=false;
@@ -23,7 +23,7 @@ uint32_t testSampleMs=50, confirmMs=0, heartbeatMs=30000, sleepMs=120000;
 bool doWakeEnabled=false, resumed=false;
 rain::PendingRain rainEvent;
 uint64_t lastSample=0, lastTx=0, lastAck=0, nextSend=0, ackStart=0, lastScreen=0;
-uint32_t helloBackoff=15000, attempts=0, sentStates=0, ackedStates=0, retries=0, ackTimeouts=0, authRejects=0;
+uint32_t helloBackoff=2000, attempts=0, sentStates=0, ackedStates=0, retries=0, ackTimeouts=0, authRejects=0;
 float lastRssi=-150, lastSnr=-20, remoteRssi=-150, remoteSnr=-20;
 uint64_t lastRtt=0, txStarted=0;
 RainFrame pendingFrame{}, receiver{};
@@ -212,12 +212,12 @@ void configureRoleRoutes() {
     web.send(202,"text/plain",sensorInput.manual?"Orden manual pendiente de ACK LoRa":"Sensor fisico habilitado");
   });
   web.on("/receiver",HTTP_POST,[](){
-    if(!corePostAllowed())return;uint64_t policy,loss,armed,polarity,seconds,duration;
+    if(!corePostAllowed())return;uint64_t policy,loss,armed,polarity,seconds,duration,contact,input_low,pin;
     if(!readUnsigned("policy",policy)||!readUnsigned("loss",loss)||!readUnsigned("armed",armed)||!readUnsigned("loss_seconds",seconds)||!readUnsigned("polarity",polarity)||
-       !readDuration(duration)||policy>2||loss>2||armed>1||polarity>1||seconds<1||seconds>UINT32_MAX/1000||
+       !readUnsigned("contact",contact)||!readUnsigned("input_low",input_low)||!readUnsigned("pin",pin)||!readDuration(duration)||policy>2||loss>2||armed>1||polarity>1||contact>1||input_low>1||(pin!=2&&pin!=5)||seconds<1||seconds>UINT32_MAX/1000||
        (armed&&web.arg("confirm")!="ARMAR")){web.send(400,"text/plain","Configuracion invalida o falta ARMAR");return;}
     if(configPending||resetPending){web.send(409,"text/plain","Ya hay una orden pendiente");return;}
-    requestedConfig=armed|(policy<<1)|(loss<<3)|(polarity<<6);requestedPulseMs=duration;requestedLossSeconds=seconds;configPending=true;commandResult="Pendiente";
+    requestedConfig=armed|(policy<<1)|(loss<<3)|(polarity<<6)|(contact<<7)|(input_low<<8)|((pin==2?1UL:0UL)<<9);requestedPulseMs=duration;requestedLossSeconds=seconds;configPending=true;commandResult="Pendiente";
     recordEvent("receiver_config_queued");web.send(202,"text/plain","Configuracion en cola. Comprueba config_pending hasta confirmacion.");
   });
   web.on("/reset-activation",HTTP_POST,[](){if(!corePostAllowed())return;if(configPending||resetPending){web.send(409,"text/plain","Orden pendiente");return;}
@@ -265,7 +265,9 @@ String getStatusJson() {
     ",\"rx_armed\":"+String(receiver.flags&ACK_RELAY_ARMED?"true":"false")+",\"rx_coil\":"+String(receiver.flags&ACK_COIL_ON?"true":"false")+
     ",\"rx_maintenance\":"+String(receiver.flags&ACK_MAINTENANCE?"true":"false")+",\"rx_restored\":"+String(receiver.config&32?"true":"false")+
     ",\"remaining_ms\":\""+u64(receiver.remainingMs)+"\",\"pulse_ms\":\""+u64(receiver.pulseMs)+"\""+
-    ",\"contact_nc\":"+String(receiver.config&128?"true":"false")+",\"polarity\":"+String(receiver.config&64?1:0)+",\"command_result\":\""+commandResult+"\""+
+    ",\"contact_nc\":"+String(receiver.config&128?"true":"false")+
+    ",\"relay_input_low\":"+String(receiver.config&256?"true":"false")+",\"relay_pin\":"+String(receiver.config&512?2:5)+
+    ",\"polarity\":"+String(receiver.config&64?1:0)+",\"command_result\":\""+commandResult+"\""+
     ",\"policy\":"+String((receiver.config>>1)&3)+",\"loss\":"+String((receiver.config>>3)&3)+",\"loss_seconds\":"+u64(receiver.echo/1000)+
     ",\"on\":"+String(rainOnThreshold)+",\"off\":"+String(rainOffThreshold)+",\"sample\":"+String(testSampleMs)+",\"confirm_ms\":"+String(confirmMs)+
     ",\"heartbeat\":"+String(heartbeatMs)+",\"sleep\":"+String(sleepMs)+",\"dowake\":"+String(doWakeEnabled?1:0)+
@@ -301,7 +303,7 @@ void processReceived() {
       configPending=false;resetPending=false;commandResult=f.flags&ACK_CONFIG?"Confirmada":"Rechazada por el receptor";
       recordEvent(f.flags&ACK_CONFIG?"receiver_config_confirmed":"receiver_command_rejected");
     }
-    pending=false;awaitingAck=false;helloBackoff=15000;recordEvent("ack");
+    pending=false;awaitingAck=false;helloBackoff=2000;recordEvent("ack");
     bool refreshState=forceStateAfterAck || (pendingFrame.type==FRAME_STATE &&
       (pendingFrame.wet!=wetNow()||pendingFrame.event!=(rainEvent.pending?rainEvent.id:0)||bool(pendingFrame.flags&STATE_SIMULATED)!=(sensorInput.manual)));
     forceStateAfterAck=false;
@@ -310,14 +312,14 @@ void processReceived() {
   radio.startReceive();
 }
 void serviceRadio() {
-  if(coreMaintenance||(mgWaiting&&mgAttempts))return;uint64_t now=uptimeMs();
-  if(awaitingAck&&now-ackStart>=ACK_TIMEOUT_MS){awaitingAck=false;++ackTimeouts;nextSend=now+4000;recordEvent("ack_timeout");}
+  if(coreMaintenance)return;uint64_t now=uptimeMs();
+  if(awaitingAck&&now-ackStart>=ACK_TIMEOUT_MS){awaitingAck=false;++ackTimeouts;nextSend=now+350;recordEvent("ack_timeout");}
   if(awaitingAck||now<nextSend)return;
   uint64_t duty=coreDutyWaitMs();if(duty){nextSend=now+duty;return;}
   if(!sessionId){
     auto f=newFrame(FRAME_HELLO,TX_ID,senderBoot,0,helloNonce);
     int16_t rc=transmitFrame(f,onRadioReceive);recordEvent(rc==RADIOLIB_ERR_NONE?"hello":"hello_error");
-    nextSend=now+helloBackoff;helloBackoff=constrain(helloBackoff*2,15000UL,300000UL);return;
+    nextSend=now+helloBackoff;helloBackoff=constrain(helloBackoff*2,2000UL,30000UL);return;
   }
   if(!pending&&(configPending||resetPending)){
     pendingFrame=newFrame(FRAME_CONFIG,TX_ID,senderBoot,++txSequence,sessionId);
@@ -326,12 +328,16 @@ void serviceRadio() {
   }
   if(!pending&&now-lastTx>=(uint64_t)heartbeatMs)queueState();
   if(!pending)return;
-  if(attempts>=3){sessionId=0;helloNonce=random64();if(!helloNonce)helloNonce=1;pending=false;awaitingAck=false;nextSend=now+helloBackoff;recordEvent("session_retry");return;}
+  if(attempts>=5){
+    sessionId=0;helloNonce=random64();if(!helloNonce)helloNonce=1;
+    pending=false;awaitingAck=false;nextSend=now+500;helloBackoff=2000;
+    recordEvent("session_retry");return;
+  }
   pendingFrame.session=sessionId;txStarted=uptimeMs();int16_t rc=transmitFrame(pendingFrame,onRadioReceive);
   if(rc==-32000){nextSend=now+coreDutyWaitMs();return;}
   if(attempts++)++retries;if(pendingFrame.type==FRAME_STATE)++sentStates;
   lastTx=uptimeMs();recordEvent(rc==RADIOLIB_ERR_NONE?"tx":"tx_error");
-  if(rc==RADIOLIB_ERR_NONE){awaitingAck=true;ackStart=uptimeMs();}else nextSend=now+4000;
+  if(rc==RADIOLIB_ERR_NONE){awaitingAck=true;ackStart=uptimeMs();}else nextSend=now+400;
 }
 void setup() {
   Serial.begin(115200);coreRole="TX";coreLoadDevice();loadSettings();coreInitDisplay();managementOnRx=onRadioReceive;managementApplyTest=applyManualSelection;
@@ -352,14 +358,14 @@ void setup() {
   if(!resumed)coreStartPortal(false);if(sessionId)queueState();nextSend=uptimeMs();
 }
 void loop() {
-  coreTickPortal();coreTickDisplay(false);processReceived();managementTick();
+  coreTickPortal();coreTickDisplay(false);processReceived();
   static bool previousPrototype=corePrototype;
   if(previousPrototype&&!corePrototype){bool old=wetNow();sensorInput.manual=false;sensorInput.pending=true;++sensorInput.revision;manualFeedback="Sensor fisico: esperando ACK";detector={};
     updateSensor(true,false);if(old!=wetNow())sensorStateSinceMs=uptimeMs();if(!old&&wetNow())latchRainEvent();
     recordEvent("sensor_physical_production");if(recording){recordEvent("record_stop_mode");recordFile.close();recording=false;}
     if(pending||awaitingAck)forceStateAfterAck=true;else queueState();}
   previousPrototype=corePrototype;
-  if(!coreMaintenance)updateSensor();serviceRadio();
+  if(!coreMaintenance)updateSensor();serviceRadio();managementTick();
   uint64_t now=uptimeMs();static uint64_t lastBattery=0;
   const bool linkCurrent=linkOk();
   if(linkCurrent!=previousLinkOk){previousLinkOk=linkCurrent;
@@ -367,12 +373,12 @@ void loop() {
   }
   if(corePrototype&&corePaired&&!coreMaintenance&&!coreOtaInProgress&&
      !awaitingAck&&!mgWaiting&&!coreDutyWaitMs()&&
-     ((!lastAck&&now>180000)||(lastAck&&now-lastAck>180000))&&
-     now-lastRadioProbeMs>180000){
+     ((!lastAck&&now>60000)||(lastAck&&now-lastAck>60000)||coreRxRecoveryNeeded)&&
+     now-lastRadioProbeMs>15000){
     lastRadioProbeMs=now;
     if(coreRecoverRadio(onRadioReceive,"TX without ACK")){
       sessionId=0;pending=false;awaitingAck=false;helloNonce=random64();if(!helloNonce)helloNonce=1;
-      nextSend=now;helloBackoff=15000;recordEvent("session_recovery");
+      nextSend=now;helloBackoff=2000;recordEvent("session_recovery");
     }
   }
   if(!coreMaintenance&&now-lastBattery>=30000){lastBattery=now;readBattery();}
@@ -405,4 +411,4 @@ bool applyOperational(const Operational &op){
   return ok;
 }
 
-bool managementCanSend(){return !awaitingAck&&(mgAttempts>0||!pending);}
+bool managementCanSend(){return !awaitingAck&&!pending&&!coreMaintenance;}
